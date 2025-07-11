@@ -1,0 +1,1 @@
+{"rank_data_time": 8.989194544032216, "data_time": 8.989194544032216, "train/total_loss": 0.13153479155153036, "train/loss_sem_seg": 0.10207774303853512, "train/loss_center": 0.016559511190280318, "train/loss_offset": 0.012897537322714925, "lr": 5e-07, "_timestamp": 1752239142, "_runtime": 17, "_step": 1, "_wandb": {"runtime": 18}}

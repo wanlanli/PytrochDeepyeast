@@ -1,0 +1,54 @@
+_BASE_: ../Cityscapes-PanopticSegmentation/Base-PanopticDeepLab-OS16.yaml
+MODEL:
+  WEIGHTS: "detectron2://DeepLab/R-52.pkl"
+  PIXEL_MEAN: [102.364, 102.364, 102.364]
+  PIXEL_STD: [23.532, 23.532, 23.532]
+  BACKBONE:
+    NAME: "build_resnet_deeplab_backbone"
+  RESNETS:
+    DEPTH: 50
+    NORM: "SyncBN"
+    RES5_MULTI_GRID: [1, 2, 4]
+    STEM_TYPE: "deeplab"
+    STEM_OUT_CHANNELS: 128
+    STRIDE_IN_1X1: False
+  RETINANET:
+    NUM_CLASSES: 9
+  SEM_SEG_HEAD:
+    NUM_CLASSES: 9
+    LOSS_TOP_K: 1.0
+    USE_DEPTHWISE_SEPARABLE_CONV: True
+  PANOPTIC_DEEPLAB:
+    STUFF_AREA: 2048
+    NMS_KERNEL: 41
+    SIZE_DIVISIBILITY: 320
+    USE_DEPTHWISE_SEPARABLE_CONV: True
+  ROI_BOX_HEAD:
+    FED_LOSS_NUM_CLASSES: 9
+  ROI_HEADS:
+    NUM_CLASSES: 9
+DATASETS:
+  TRAIN: ("yeast_2024_train_panoptic_with_sem_seg",)
+  TEST: ("yeast_2024_val_panoptic_with_sem_seg",)
+SOLVER:
+  BASE_LR: 0.0005
+  MAX_ITER: 100000
+  IMS_PER_BATCH: 32
+  CHECKPOINT_PERIOD: 5000
+INPUT:
+  FORMAT: "RGB"
+  GAUSSIAN_SIGMA: 8
+  MIN_SIZE_TRAIN: !!python/object/apply:eval ["[int(x * 0.1 * 320) for x in range(5, 16)]"]
+  MIN_SIZE_TRAIN_SAMPLING: "choice"
+  MIN_SIZE_TEST: 320
+  MAX_SIZE_TRAIN: 512
+  MAX_SIZE_TEST: 320
+  SMALL_INSTANCE_AREA: 100
+  SMALL_INSTANCE_WEIGHT: 1
+  CROP:
+    ENABLED: True
+    TYPE: "absolute"
+    SIZE: (512, 512)
+WANDB:
+  NAME: null
+  PROJECT: DeepLab

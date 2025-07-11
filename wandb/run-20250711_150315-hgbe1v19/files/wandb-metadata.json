@@ -1,0 +1,31 @@
+{
+    "os": "Linux-5.15.0-101-generic-x86_64-with-glibc2.17",
+    "python": "3.8.19",
+    "heartbeatAt": "2025-07-11T13:03:16.495836",
+    "startedAt": "2025-07-11T13:03:15.298603",
+    "docker": null,
+    "gpu": "NVIDIA GeForce GTX 1080 Ti",
+    "gpu_count": 4,
+    "cpu_count": 24,
+    "cuda": null,
+    "args": [
+        "--dist-url",
+        "tcp://127.0.0.1:50164",
+        "--config-file",
+        "/data/martin/liwa/PytrochDeepyeast/projects/Panoptic-DeepLab/configs/yeast_panoptics/city_deeplab_crop_512x512_300data.yaml",
+        "--num-gpus",
+        "4"
+    ],
+    "state": "running",
+    "program": "/data/martin/liwa/PytrochDeepyeast/projects/Panoptic-DeepLab/train_net_yeast.py",
+    "codePath": "projects/Panoptic-DeepLab/train_net_yeast.py",
+    "git": {
+        "remote": "git@github.com:wanlanli/PytrochDeepyeast.git",
+        "commit": "8fa35d420f7a2a156a0eb3819cd1cc6dd5a9707d"
+    },
+    "email": "wanlanli.ky@gmail.com",
+    "root": "/data/martin/liwa/PytrochDeepyeast",
+    "host": "smaug",
+    "username": "liwa",
+    "executable": "/home/liwa/miniconda3/envs/oneformer/bin/python"
+}
