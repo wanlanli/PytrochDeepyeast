@@ -183,7 +183,6 @@ class PanopticDeepLab(nn.Module):
             processed_results[-1]["panoptic_seg"] = (panoptic_image, None)
             # For instance segmentation evaluation.
             if self.predict_instances:
-                print("aaa")
                 instances = []
                 panoptic_image_cpu = panoptic_image.cpu().numpy()
                 for panoptic_label in np.unique(panoptic_image_cpu):
@@ -193,7 +192,6 @@ class PanopticDeepLab(nn.Module):
                     isthing = pred_class in list(
                         self.meta.thing_dataset_id_to_contiguous_id.values()
                     )
-                    print(pred_class)
                     # Get instance segmentation results.
                     if isthing:
                         instance = Instances((height, width))
@@ -222,12 +220,14 @@ class PanopticDeepLab(nn.Module):
                             [center_scores], device=panoptic_image.device
                         )
 
+                        instance.panoptic_label = torch.tensor(
+                            [panoptic_label], device=panoptic_image.device
+                        )
+
                         # Get bounding boxes
                         instance.pred_boxes = BitMasks(instance.pred_masks).get_bounding_boxes()
                         instances.append(instance)
-                        print("is thing append")
                 if len(instances) > 0:
-                    print("nnn")
                     processed_results[-1]["instances"] = Instances.cat(instances)
 
         return processed_results
