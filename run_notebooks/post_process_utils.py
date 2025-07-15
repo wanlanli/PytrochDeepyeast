@@ -1,8 +1,8 @@
-from skimage import measure
+from skimage import measure, morphology
 import numpy as np
 
 
-def get_largest_object(mask):
+def get_largest_object(mask, threshold=1000):
     """
     Extract the largest connected component from a binary mask.
 
@@ -31,6 +31,7 @@ def get_largest_object(mask):
 
     # Create a new mask for the largest region
     largest_mask = labeled == largest.label
+    largest_mask = morphology.remove_small_holes(largest_mask, area_threshold=threshold)
     return len(props), largest_mask
 
 
@@ -159,11 +160,6 @@ def segment_slide_window(predictor, orginal_image, crops,
 
             new_label = (label//1000)*1000 + object_id
             object_id += 1
-
-            # over_lapped_labels = np.unique(mask_merged[c1:c2,c3:c4][mask>0])[1:]
-
-            # mask_merged[c1:c2, c3:c4][np.isin(mask_merged[c1:c2, c3:c4], over_lapped_labels)] = 0
-            # mask_merged[c1:c2, c3:c4][mask>0] = new_label
             mask_merged = __merge_mask(mask_merged, mask, c1, c2, c3, c4, new_label)
     return mask_merged
 
