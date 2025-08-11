@@ -86,7 +86,7 @@ def __merge_mask(whole_mask, sub_new_mask, c1, c2, c3, c4, new_label):
     """
     over_lapped_labels = np.unique(whole_mask[c1:c2,c3:c4][sub_new_mask>0])[1:]
 
-    whole_mask[c1:c2, c3:c4][np.isin(whole_mask[c1:c2, c3:c4], over_lapped_labels)] = 0
+    whole_mask[np.isin(whole_mask, over_lapped_labels)] = 0
     whole_mask[c1:c2, c3:c4][sub_new_mask>0] = new_label
     return whole_mask
 
