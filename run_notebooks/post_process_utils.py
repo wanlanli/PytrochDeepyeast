@@ -168,7 +168,8 @@ def segment_slide_window(predictor, orginal_image, crops,
 def segment_post_process(prediction_output,
                               seg_threshold=0.1,
                               ins_threshold=0.6,
-                              area_threshold=1000):
+                              area_threshold=1000,
+                            remove_border=True):
     instances = prediction_output['instances']
     panopitc_labels = instances.panoptic_label.to("cpu").numpy()
     pred_masks = instances.pred_masks.to("cpu").numpy()
@@ -181,10 +182,11 @@ def segment_post_process(prediction_output,
             continue
         if ins_score < ins_threshold:
             continue
-        if pred_mask[0,:].any() or pred_mask[-1, :].any():
-            continue
-        if pred_mask[:, 0].any() or pred_mask[:, -1].any():
-            continue
+        if remove_border:
+            if pred_mask[0,:].any() or pred_mask[-1, :].any():
+                continue
+            if pred_mask[:, 0].any() or pred_mask[:, -1].any():
+                continue
         area = pred_mask.sum()
         if area < area_threshold:
             continue

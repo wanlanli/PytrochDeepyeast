@@ -72,7 +72,7 @@ class CityscapesInstanceEvaluator(CityscapesEvaluator):
                     for i in range(num_instances):
                         pred_class = output.pred_classes[i]
                         classes = self._metadata.thing_classes[pred_class]
-                        class_id = name2label[classes].id
+                        # class_id = name2label[classes].id
                         score = output.scores[i]
                         mask = output.pred_masks[i].numpy().astype("uint8")
                         png_filename = os.path.join(
@@ -81,7 +81,7 @@ class CityscapesInstanceEvaluator(CityscapesEvaluator):
 
                         Image.fromarray(mask * 255).save(png_filename)
                         fout.write(
-                            "{} {} {}\n".format(os.path.basename(png_filename), class_id, score)
+                            "{} {} {}\n".format(os.path.basename(png_filename), classes, score)
                         )
             else:
                 # Cityscapes requires a prediction file for every ground truth image.

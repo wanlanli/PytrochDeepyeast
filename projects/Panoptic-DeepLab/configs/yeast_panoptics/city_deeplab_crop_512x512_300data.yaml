@@ -1,7 +1,7 @@
 _BASE_: ../Cityscapes-PanopticSegmentation/Base-PanopticDeepLab-OS16.yaml
 MODEL:
   # WEIGHTS: "detectron2://DeepLab/R-52.pkl"
-  WEIGHTS: "/home/liwa/data/oneformer_output/output/model_0000999.pth"
+  WEIGHTS: "/home/liwa/data/oneformer_output/output/model_0059999.pth"
   PIXEL_MEAN: [102.364, 102.364, 102.364]
   PIXEL_STD: [23.532, 23.532, 23.532]
   BACKBONE:
@@ -28,9 +28,9 @@ DATASETS:
   TEST: ("yeastcity_val",)
 SOLVER:
   BASE_LR: 0.0005
-  MAX_ITER: 2000 #200000
+  MAX_ITER: 200000 #200000
   IMS_PER_BATCH: 32
-  CHECKPOINT_PERIOD: 2000 #5000
+  CHECKPOINT_PERIOD: 5000 #5000
 INPUT:
   FORMAT: "RGB"
   GAUSSIAN_SIGMA: 8
