@@ -120,6 +120,11 @@ _RAW_YEASTCITY_PANOPTIC_SPLITS = {
         "yeastcity/gtFine/yeastcity_panoptic_val",
         "yeastcity/gtFine/yeastcity_panoptic_val.json",
     ),
+    "yeastcity_fine_panoptic_test": (
+        "yeastcity/leftImg8bit/test",
+        "yeastcity/gtFine/yeastcity_panoptic_test",
+        "yeastcity/gtFine/yeastcity_panoptic_test.json",
+    ),
     # "cityscapes_fine_panoptic_test": not supported yet
 }
 

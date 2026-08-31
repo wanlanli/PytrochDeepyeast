@@ -136,11 +136,17 @@ class PanopticDeepLab(nn.Module):
             offset_targets = None
             offset_weights = None
 
-        center_results, offset_results, center_losses, offset_losses = self.ins_embed_head(
-            features, center_targets, center_weights, offset_targets, offset_weights
+        center_results, offset_results, center_losses, offset_losses, contrast_losses = self.ins_embed_head(
+            features,
+            center_targets,
+            center_weights,
+            offset_targets,
+            offset_weights,
+            sem_seg_targets=targets,
         )
         losses.update(center_losses)
         losses.update(offset_losses)
+        losses.update(contrast_losses)
 
         if self.training:
             return losses
@@ -321,11 +327,17 @@ class PanopticDeepLabSemSegHead(DeepLabV3PlusHead):
         self.predictor = Conv2d(head_channels, num_classes, kernel_size=1)
         nn.init.normal_(self.predictor.weight, 0, 0.001)
         nn.init.constant_(self.predictor.bias, 0)
-
+        class_weight = (torch.tensor( [1, 4, 3, 1, 1.5, 1.5, 1, 1, 1], dtype=torch.float32))
         if loss_type == "cross_entropy":
-            self.loss = nn.CrossEntropyLoss(reduction="mean", ignore_index=ignore_value)
+            self.loss = nn.CrossEntropyLoss(reduction="mean", ignore_index=ignore_value, weight=class_weight)
+        # elif loss_type == "hard_pixel_mining":
+        #     self.loss = ClassBalancedDeepLabCE(
+        #         ignore_label=ignore_value,
+        #         top_k_percent_pixels=loss_top_k,  # 0.2
+        #         weight=class_weight,
+        #     )
         elif loss_type == "hard_pixel_mining":
-            self.loss = DeepLabCE(ignore_label=ignore_value, top_k_percent_pixels=loss_top_k)
+            self.loss = DeepLabCE(ignore_label=ignore_value, top_k_percent_pixels=loss_top_k, weight=class_weight)
         else:
             raise ValueError("Unexpected loss type: %s" % loss_type)
 
@@ -391,6 +403,10 @@ class PanopticDeepLabInsEmbedHead(DeepLabV3PlusHead):
         head_channels: int,
         center_loss_weight: float,
         offset_loss_weight: float,
+        semantic_ignore_value: int = 255,
+        contrast_loss_weight: float = 0.005,
+        contrast_temperature: float = 0.1,
+        contrast_max_samples: int = 2048,
         **kwargs,
     ):
         """
@@ -412,6 +428,10 @@ class PanopticDeepLabInsEmbedHead(DeepLabV3PlusHead):
 
         self.center_loss_weight = center_loss_weight
         self.offset_loss_weight = offset_loss_weight
+        self.semantic_ignore_value = semantic_ignore_value
+        self.contrast_loss_weight = contrast_loss_weight
+        self.contrast_temperature = contrast_temperature
+        self.contrast_max_samples = contrast_max_samples
         use_bias = norm == ""
         # center prediction
         # `head` is additional transform before predictor
@@ -483,6 +503,31 @@ class PanopticDeepLabInsEmbedHead(DeepLabV3PlusHead):
         nn.init.normal_(self.offset_predictor.weight, 0, 0.001)
         nn.init.constant_(self.offset_predictor.bias, 0)
 
+        # Projection head for supervised contrastive learning.
+        # It maps the shared decoder feature into an embedding space used only by loss_contrast.
+        self.contrast_head = nn.Sequential(
+            Conv2d(
+                decoder_channels[0],
+                decoder_channels[0],
+                kernel_size=3,
+                padding=1,
+                bias=use_bias,
+                norm=get_norm(norm, decoder_channels[0]),
+                activation=F.relu,
+            ),
+            Conv2d(
+                decoder_channels[0],
+                head_channels,
+                kernel_size=3,
+                padding=1,
+                bias=use_bias,
+                norm=get_norm(norm, head_channels),
+                activation=F.relu,
+            ),
+        )
+        weight_init.c2_xavier_fill(self.contrast_head[0])
+        weight_init.c2_xavier_fill(self.contrast_head[1])
+
         self.center_loss = nn.MSELoss(reduction="none")
         self.offset_loss = nn.L1Loss(reduction="none")
 
@@ -510,6 +555,11 @@ class PanopticDeepLabInsEmbedHead(DeepLabV3PlusHead):
             head_channels=cfg.MODEL.INS_EMBED_HEAD.HEAD_CHANNELS,
             center_loss_weight=cfg.MODEL.INS_EMBED_HEAD.CENTER_LOSS_WEIGHT,
             offset_loss_weight=cfg.MODEL.INS_EMBED_HEAD.OFFSET_LOSS_WEIGHT,
+            semantic_ignore_value=cfg.MODEL.SEM_SEG_HEAD.IGNORE_VALUE,
+            # Tune these after the first run. They are kept here to avoid requiring config changes.
+            contrast_loss_weight=0.005,
+            contrast_temperature=0.1,
+            contrast_max_samples=2048,
             use_depthwise_separable_conv=cfg.MODEL.SEM_SEG_HEAD.USE_DEPTHWISE_SEPARABLE_CONV,
         )
         return ret
@@ -521,19 +571,21 @@ class PanopticDeepLabInsEmbedHead(DeepLabV3PlusHead):
         center_weights=None,
         offset_targets=None,
         offset_weights=None,
+        sem_seg_targets=None,
     ):
         """
         Returns:
             In training, returns (None, dict of losses)
             In inference, returns (CxHxW logits, {})
         """
-        center, offset = self.layers(features)
+        center, offset, contrast_embedding = self.layers(features)
         if self.training:
             return (
                 None,
                 None,
                 self.center_losses(center, center_targets, center_weights),
                 self.offset_losses(offset, offset_targets, offset_weights),
+                self.contrast_losses(contrast_embedding, sem_seg_targets),
             )
         else:
             center = F.interpolate(
@@ -545,7 +597,7 @@ class PanopticDeepLabInsEmbedHead(DeepLabV3PlusHead):
                 )
                 * self.common_stride
             )
-            return center, offset, {}, {}
+            return center, offset, {}, {}, {}
 
     def layers(self, features):
         assert self.decoder_only
@@ -556,7 +608,73 @@ class PanopticDeepLabInsEmbedHead(DeepLabV3PlusHead):
         # offset
         offset = self.offset_head(y)
         offset = self.offset_predictor(offset)
-        return center, offset
+        # contrastive embedding
+        contrast_embedding = self.contrast_head(y)
+        return center, offset, contrast_embedding
+
+    def contrast_losses(self, features, targets):
+        """
+        Pixel-level supervised contrastive loss.
+
+        Args:
+            features: contrastive embeddings, shape [B, C, Hf, Wf]
+            targets: semantic labels, shape [B, H, W]
+        """
+        if targets is None or self.contrast_loss_weight <= 0:
+            return {"loss_contrast": features.sum() * 0.0}
+
+        B, C, Hf, Wf = features.shape
+
+        targets_small = F.interpolate(
+            targets.unsqueeze(1).float(),
+            size=(Hf, Wf),
+            mode="nearest",
+        ).squeeze(1).long()
+
+        features = features.permute(0, 2, 3, 1).reshape(-1, C)
+        labels = targets_small.reshape(-1)
+
+        valid = labels != self.semantic_ignore_value
+        features = features[valid]
+        labels = labels[valid]
+
+        if features.shape[0] < 2:
+            return {"loss_contrast": features.sum() * 0.0}
+
+        # Random pixel sampling avoids an NxN matrix that is too large.
+        if features.shape[0] > self.contrast_max_samples:
+            idx = torch.randperm(features.shape[0], device=features.device)[: self.contrast_max_samples]
+            features = features[idx]
+            labels = labels[idx]
+
+        features = F.normalize(features, dim=1)
+
+        logits = torch.matmul(features, features.T) / self.contrast_temperature
+        logits = logits - logits.max(dim=1, keepdim=True)[0].detach()
+
+        labels = labels.view(-1, 1)
+        positive_mask = torch.eq(labels, labels.T).float().to(features.device)
+
+        logits_mask = torch.ones_like(positive_mask) - torch.eye(
+            positive_mask.shape[0], device=features.device
+        )
+        positive_mask = positive_mask * logits_mask
+
+        exp_logits = torch.exp(logits) * logits_mask
+        log_prob = logits - torch.log(exp_logits.sum(dim=1, keepdim=True) + 1e-8)
+
+        positives_per_sample = positive_mask.sum(dim=1)
+        valid_samples = positives_per_sample > 0
+
+        if valid_samples.sum() == 0:
+            return {"loss_contrast": features.sum() * 0.0}
+
+        mean_log_prob_pos = (
+            positive_mask * log_prob
+        ).sum(dim=1) / (positives_per_sample + 1e-8)
+
+        loss = -mean_log_prob_pos[valid_samples].mean()
+        return {"loss_contrast": loss * self.contrast_loss_weight}
 
     def center_losses(self, predictions, targets, weights):
         predictions = F.interpolate(
@@ -584,3 +702,103 @@ class PanopticDeepLabInsEmbedHead(DeepLabV3PlusHead):
             loss = loss.sum() * 0
         losses = {"loss_offset": loss * self.offset_loss_weight}
         return losses
+
+import math
+class ClassBalancedDeepLabCE(nn.Module):
+    def __init__(
+        self,
+        ignore_label: int,
+        top_k_percent_pixels: float = 0.2,
+        weight: torch.Tensor = None,
+        min_kept_per_class: int = 32,
+    ):
+        super().__init__()
+
+        if not 0 < top_k_percent_pixels <= 1:
+            raise ValueError(
+                f"top_k_percent_pixels must be in (0, 1], "
+                f"got {top_k_percent_pixels}"
+            )
+
+        self.ignore_label = ignore_label
+        self.top_k_percent_pixels = top_k_percent_pixels
+        self.min_kept_per_class = min_kept_per_class
+
+        # Ensures the weights automatically move to GPU with the model.
+        if weight is not None:
+            weight = torch.as_tensor(weight, dtype=torch.float32)
+
+        self.register_buffer("weight", weight)
+
+    def forward(
+        self,
+        logits: torch.Tensor,
+        targets: torch.Tensor,
+        pixel_weights: torch.Tensor = None,
+    ) -> torch.Tensor:
+
+        num_classes = logits.shape[1]
+
+        pixel_losses = F.cross_entropy(
+            logits,
+            targets.long(),
+            reduction="none",
+            ignore_index=self.ignore_label,
+        )
+
+        # Preserve Panoptic-DeepLab's per-pixel weighting.
+        if pixel_weights is not None:
+            pixel_weights = pixel_weights.to(
+                device=pixel_losses.device,
+                dtype=pixel_losses.dtype,
+            )
+
+            # In case weights has shape [B, 1, H, W]
+            if pixel_weights.ndim == 4 and pixel_weights.shape[1] == 1:
+                pixel_weights = pixel_weights[:, 0]
+
+            pixel_losses = pixel_losses * pixel_weights
+
+        class_losses = []
+        active_class_weights = []
+
+        for class_id in range(num_classes):
+            class_mask = targets == class_id
+            losses = pixel_losses[class_mask]
+
+            if losses.numel() == 0:
+                continue
+
+            num_kept = math.ceil(
+                losses.numel() * self.top_k_percent_pixels
+            )
+            num_kept = max(num_kept, self.min_kept_per_class)
+            num_kept = min(num_kept, losses.numel())
+
+            hard_losses = torch.topk(
+                losses,
+                k=num_kept,
+                largest=True,
+                sorted=False,
+            ).values
+
+            class_losses.append(hard_losses.mean())
+
+            if self.weight is None:
+                active_class_weights.append(
+                    logits.new_tensor(1.0)
+                )
+            else:
+                active_class_weights.append(
+                    self.weight[class_id]
+                )
+
+        if len(class_losses) == 0:
+            return logits.sum() * 0.0
+
+        class_losses = torch.stack(class_losses)
+        active_class_weights = torch.stack(active_class_weights)
+
+        return (
+            class_losses * active_class_weights
+        ).sum() / active_class_weights.sum().clamp_min(1e-6)

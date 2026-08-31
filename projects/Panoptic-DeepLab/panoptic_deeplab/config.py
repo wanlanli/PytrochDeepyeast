@@ -39,6 +39,7 @@ def add_panoptic_deeplab_config(cfg):
     cfg.MODEL.INS_EMBED_HEAD.NORM = "SyncBN"
     cfg.MODEL.INS_EMBED_HEAD.CENTER_LOSS_WEIGHT = 200.0
     cfg.MODEL.INS_EMBED_HEAD.OFFSET_LOSS_WEIGHT = 0.01
+    cfg.MODEL.INS_EMBED_HEAD.CONTRAST_LOSS_WEIGHT = 0.0025
     # Panoptic-DeepLab post-processing setting.
     cfg.MODEL.PANOPTIC_DEEPLAB = CN()
     # Stuff area limit, ignore stuff region below this number.

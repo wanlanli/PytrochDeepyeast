@@ -27,3 +27,15 @@ YEAST_CATEGORIES = [
     {"color": [105, 150, 230], "isthing": 0, "id": 11, "trainId": 8, "name": "paired"},
     {"color": [120, 107, 207], "isthing": 0, "id": 12, "trainId": 8, "name": "unknown"},
 ]
+
+YEAST_SEM_SEG_CATEGORIES = [
+    {"id": 0, "name": "background", "color": [0, 0, 0]},
+    {"id": 1, "name": "cell", "color": [253, 27, 27]},
+    {"id": 2, "name": "shmoo", "color": [249, 127, 34]},
+    {"id": 3, "name": "zygote", "color": [246, 223, 107]},
+    {"id": 4, "name": "tetrad", "color": [42, 180, 112]},
+    {"id": 5, "name": "lysis", "color": [39, 69, 167]},
+    {"id": 6, "name": "spore", "color": [71, 20, 101]},
+    {"id": 7, "name": "mating_type", "color": [252, 111, 177]},
+    {"id": 8, "name": "paired_unknown", "color": [105, 150, 230]},
+]

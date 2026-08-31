@@ -1,7 +1,7 @@
 _BASE_: ../Cityscapes-PanopticSegmentation/Base-PanopticDeepLab-OS16.yaml
 MODEL:
   # WEIGHTS: "detectron2://DeepLab/R-52.pkl"
-  WEIGHTS: "/home/liwa/data/oneformer_output/output/model_0059999.pth"
+  WEIGHTS: "/home/liwa/data/oneformer_output/output/model_0119999_v3.pth"
   PIXEL_MEAN: [102.364, 102.364, 102.364]
   PIXEL_STD: [23.532, 23.532, 23.532]
   BACKBONE:
@@ -17,6 +17,7 @@ MODEL:
     NUM_CLASSES: 9
   SEM_SEG_HEAD:
     NUM_CLASSES: 9
+    LOSS_WEIGHT: 2.0
   ROI_BOX_HEAD:
     FED_LOSS_NUM_CLASSES: 9
   ROI_HEADS:

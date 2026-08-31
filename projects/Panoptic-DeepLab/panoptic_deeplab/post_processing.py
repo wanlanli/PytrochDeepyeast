@@ -151,7 +151,8 @@ def merge_semantic_and_instance(
         
         # thing_mask[0] = torch.from_numpy(self_defined_post_process(thing_mask[0].cpu().numpy()))
         thing_mask[0] = torch_self_defined_post_process(thing_mask[0])
-
+        if thing_mask.sum() == 0:
+            continue
         class_id, _ = torch.mode(sem_seg[thing_mask].view(-1))
         class_id_tracker[class_id.item()] += 1
         new_ins_id = class_id_tracker[class_id.item()]

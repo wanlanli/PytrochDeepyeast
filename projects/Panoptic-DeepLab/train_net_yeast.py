@@ -19,6 +19,7 @@ from detectron2.evaluation import (
     CityscapesInstanceEvaluator,
     CityscapesSemSegEvaluator,
     COCOEvaluator,
+    SemSegEvaluator,
     COCOPanopticEvaluator,
     DatasetEvaluators,
 )
@@ -50,6 +51,8 @@ def build_sem_seg_train_aug(cfg):
     augs.append(T.RandomApply(T.RandomFlip(), 0.5))
     augs.append(T.RandomApply(T.RandomBrightness(intensity_min=0.5, intensity_max=1.5), 0.5))
     augs.append(T.RandomApply(T.RandomContrast(intensity_min=0.5, intensity_max=1.5), 0.5))
+    augs.append(T.RandomChannelShuffle())
+    
     if cfg.INPUT.CROP.ENABLED:
         augs.append(T.FixedSizeCrop(cfg.INPUT.CROP.SIZE))
     return augs
@@ -77,14 +80,16 @@ class Trainer(DefaultTrainer):
             output_folder = os.path.join(cfg.OUTPUT_DIR, "inference")
         evaluator_list = []
         evaluator_type = MetadataCatalog.get(dataset_name).evaluator_type
-        if evaluator_type in ["cityscapes_panoptic_seg", "coco_panoptic_seg", "yeastcity_panoptic_seg"]:
+        if evaluator_type in ["cityscapes_panoptic_seg", "coco_panoptic_seg"]:
             evaluator_list.append(COCOPanopticEvaluator(dataset_name, output_folder))
         if evaluator_type == "cityscapes_panoptic_seg":
             evaluator_list.append(CityscapesSemSegEvaluator(dataset_name))
             evaluator_list.append(CityscapesInstanceEvaluator(dataset_name))
         if evaluator_type == "yeastcity_panoptic_seg":
-            evaluator_list.append(CityscapesSemSegEvaluator(dataset_name))
-            evaluator_list.append(CityscapesInstanceEvaluator(dataset_name))
+            evaluator_list.append(COCOPanopticEvaluator(dataset_name, output_folder))
+            evaluator_list.append(SemSegEvaluator(dataset_name, output_folder))
+            # evaluator_list.append(CityscapesInstanceEvaluator(dataset_name))
+            # evaluator_list.append(COCOPanopticEvaluator(dataset_name, output_folder))
         if evaluator_type == "coco_panoptic_seg":
             # `thing_classes` in COCO panoptic metadata includes both thing and
             # stuff classes for visualization. COCOEvaluator requires metadata

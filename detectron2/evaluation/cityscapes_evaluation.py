@@ -126,6 +126,7 @@ class CityscapesInstanceEvaluator(CityscapesEvaluator):
         ret = OrderedDict()
         ret["segm"] = {"AP": results["allAp"] * 100, "AP50": results["allAp50%"] * 100}
         self._working_dir.cleanup()
+        print(1)
         return ret
 
 
@@ -180,12 +181,16 @@ class CityscapesSemSegEvaluator(CityscapesEvaluator):
         ), "Cannot find any ground truth images to use for evaluation. Searched for: {}".format(
             cityscapes_eval.args.groundTruthSearch
         )
+        print(5)
         predictionImgList = []
+        print(groundTruthImgList)
         for gt in groundTruthImgList:
             predictionImgList.append(cityscapes_eval.getPrediction(cityscapes_eval.args, gt))
+        print(predictionImgList)
         results = cityscapes_eval.evaluateImgLists(
             predictionImgList, groundTruthImgList, cityscapes_eval.args
         )
+        print(6)
         ret = OrderedDict()
         ret["sem_seg"] = {
             "IoU": 100.0 * results["averageScoreClasses"],
@@ -193,5 +198,6 @@ class CityscapesSemSegEvaluator(CityscapesEvaluator):
             "IoU_sup": 100.0 * results["averageScoreCategories"],
             "iIoU_sup": 100.0 * results["averageScoreInstCategories"],
         }
+        print(7)
         self._working_dir.cleanup()
         return ret

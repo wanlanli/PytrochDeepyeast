@@ -43,6 +43,7 @@ __all__ = [
     "RandomResize",
     "MinIoURandomCrop",
     "RescaleShortestEdge",
+    "RandomChannelShuffle",
 ]
 
 
@@ -806,3 +807,37 @@ class MinIoURandomCrop(Augmentation):
                     if not mask.any():
                         continue
                 return CropTransform(int(left), int(top), int(new_w), int(new_h))
+
+
+class RandomChannelShuffle(Augmentation):
+    def __init__(self, dic_repeat_prob=0.5):
+        super().__init__()
+        self.dic_repeat_prob = np.random.random()
+
+    def get_transform(self, image):
+        if np.random.rand() < self.dic_repeat_prob:
+            return ChannelShuffleTransform(mode="dic_repeat")
+        else:
+            order = np.random.permutation(3)
+            return ChannelShuffleTransform(mode="shuffle", order=order)
+
+
+class ChannelShuffleTransform(Transform):
+    def __init__(self, mode="shuffle", order=None):
+        super().__init__()
+        self.mode = mode
+        self.order = order
+
+    def apply_image(self, img):
+        if self.mode == "dic_repeat":
+            return np.repeat(img[:, :, 0:1], 3, axis=2)
+        return img[:, :, self.order]
+
+    def apply_coords(self, coords):
+        return coords
+
+    def inverse(self):
+        return NoOpTransform()
+
+    def apply_segmentation(self, segmentation):
+        return segmentation
