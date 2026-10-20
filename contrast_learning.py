@@ -1084,6 +1084,69 @@ def extract_embeddings_from_folders(
 # t-SNE
 # ============================================================
 
+def extract_image_embeddings_from_folder(
+    predictor,
+    image_folder,
+    output_folder,
+    target_layer,
+    max_images=None,
+    start_index=0,
+    end_index=None,
+):
+    """Save the full [C, H_feature, W_feature] embedding for each image.
+
+    No masks, instance pooling, or phenotype filtering are used. Images are
+    passed whole to the predictor, which handles its usual preprocessing.
+    Returns a mapping from image filename to saved .npy path. Unlike the
+    mask-based function, end_index=None includes the final image.
+    """
+    image_folder = Path(image_folder)
+    output_folder = Path(output_folder)
+    image_paths = sorted(
+        path for path in image_folder.iterdir()
+        if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS
+    )[start_index:end_index]
+    if max_images is not None:
+        if max_images < 0:
+            raise ValueError("max_images must be nonnegative or None")
+        image_paths = image_paths[:max_images]
+    if not image_paths:
+        raise ValueError(f"No input images selected from {image_folder}")
+
+    output_folder.mkdir(parents=True, exist_ok=True)
+    predictor.model.eval()
+    feature_hook = FeatureHook(
+        model=predictor.model,
+        layer_name=target_layer,
+    )
+    saved_paths = {}
+    try:
+        with torch.no_grad():
+            for image_index, image_path in enumerate(image_paths):
+                image = imread(image_path)
+                feature_hook.clear()
+                predictor(image)
+                if feature_hook.feature is None:
+                    raise RuntimeError(
+                        f"No feature captured from {target_layer}. "
+                        "Ensure this layer executes during inference."
+                    )
+                embedding = prepare_feature_map(
+                    feature_hook.feature
+                ).detach().cpu().numpy()
+                # Include the image extension to avoid same-stem collisions.
+                output_path = output_folder / f"{image_path.name}.npy"
+                np.save(output_path, embedding, allow_pickle=False)
+                saved_paths[image_path.name] = output_path
+                if (image_index + 1) % 10 == 0:
+                    print(f"Saved {image_index + 1}/{len(image_paths)} embeddings.")
+    finally:
+        feature_hook.close()
+
+    print(f"Saved {len(saved_paths)} image embeddings to {output_folder}")
+    return saved_paths
+
+
 def calculate_tsne(
     embeddings,
     perplexity=30,
@@ -1297,3 +1360,272 @@ def get_original_name(image_name):
     ):
         image_name = image_name.replace(suffix, "")
     return image_name
+
+
+def extract_cell_embeddings_from_folder(
+    predictor,
+    image_folder,
+    target_layer,
+    output_folder="./cell_embeddings",
+    max_images=None,
+    start_index=0,
+    end_index=None,
+    min_original_pixels=20,
+    min_feature_pixels=2,
+    instance_divisor=1000,
+    category_id_offset=0,
+):
+    """
+    Save per-cell embeddings and their corresponding full-resolution masks.
+
+    Output:
+        output_folder/cells.npz
+        output_folder/masks/<original_filename>.cells.npy
+
+    cells.npz fields:
+        embeddings:       [N, C], normalized cell embeddings
+        cell_ids:         [N], globally unique positive IDs
+        label_ids:        [N], predicted phenotype IDs
+        segment_ids:      [N], original predictor segment IDs
+        image_names:      [N], source filenames
+        mask_files:       [N], paths relative to output_folder
+        pixel_counts:     [N], full-resolution cell areas
+        bboxes_yxyx:      [N, 4], (ymin, xmin, ymax, xmax);
+                          maximum coordinates are exclusive
+
+    Each saved mask has shape [H, W]:
+        0 = background or excluded cell
+        cell_id = the corresponding saved cell
+
+    category_id_offset:
+        Applied only when segments_info is provided.
+        Use 1 if predictor categories are 0–5 and phenotype IDs are 1–6.
+
+    When segments_info is None, assumes:
+        segment_id = label_id * instance_divisor + instance_id.
+    """
+    image_folder = Path(image_folder)
+    output_folder = Path(output_folder)
+    mask_folder = output_folder / "masks"
+
+    files = sorted(
+        p for p in image_folder.iterdir()
+        if p.is_file()
+        and p.suffix.lower() in {
+            ".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp"
+        }
+    )[start_index:end_index]
+
+    if max_images is not None:
+        if max_images < 0:
+            raise ValueError("max_images must be nonnegative.")
+        files = files[:max_images]
+
+    if not files:
+        raise ValueError("No input images selected.")
+
+    # Protect an existing extraction from partial overwriting.
+    output_folder.mkdir(parents=True, exist_ok=True)
+    if (output_folder / "cells.npz").exists() or mask_folder.exists():
+        raise FileExistsError(
+            f"Extraction already exists in {output_folder}. "
+            "Choose a new output_folder."
+        )
+    mask_folder.mkdir()
+
+    collected = {
+        "embeddings": [],
+        "cell_ids": [],
+        "label_ids": [],
+        "segment_ids": [],
+        "image_names": [],
+        "mask_files": [],
+        "pixel_counts": [],
+        "bboxes_yxyx": [],
+    }
+
+    predictor.model.eval()
+    hook = FeatureHook(
+        model=predictor.model,
+        layer_name=target_layer,
+    )
+
+    next_cell_id = 1
+
+    try:
+        with torch.no_grad():
+            for image_index, image_path in enumerate(files):
+                image = imread(image_path)
+
+                hook.clear()
+                outputs = predictor(image)
+
+                if hook.feature is None:
+                    raise RuntimeError(
+                        f"No feature captured from {target_layer}."
+                    )
+                if "panoptic_seg" not in outputs:
+                    raise RuntimeError(
+                        "Predictor must return outputs['panoptic_seg']."
+                    )
+
+                feature_map = prepare_feature_map(
+                    hook.feature
+                ).detach().float().clone()
+
+                predicted_mask, segments_info = outputs["panoptic_seg"]
+                predicted_mask = torch.as_tensor(
+                    predicted_mask,
+                    device=feature_map.device,
+                ).long()
+
+                if tuple(predicted_mask.shape) != tuple(image.shape[:2]):
+                    raise ValueError(
+                        f"Mask/image size mismatch for {image_path.name}: "
+                        f"{tuple(predicted_mask.shape)} vs {image.shape[:2]}"
+                    )
+
+                if segments_info is not None:
+                    segments = [
+                        (
+                            int(segment["id"]),
+                            int(segment["category_id"]) + category_id_offset,
+                        )
+                        for segment in segments_info
+                        if segment.get("isthing", True)
+                    ]
+                else:
+                    segments = [
+                        (
+                            int(segment_id),
+                            int(segment_id) // instance_divisor,
+                        )
+                        for segment_id in torch.unique(
+                            predicted_mask
+                        ).cpu().tolist()
+                        if int(segment_id) > 0
+                        and int(segment_id) // instance_divisor > 0
+                    ]
+
+                original_mask = predicted_mask.cpu().numpy()
+                saved_mask = np.zeros(original_mask.shape, dtype=np.int64)
+                relative_mask_path = (
+                    Path("masks") / f"{image_path.name}.cells.npy"
+                )
+                image_cell_count = 0
+
+                for segment_id, label_id in segments:
+                    cell_mask = predicted_mask == segment_id
+                    pixel_count = int(cell_mask.sum().item())
+
+                    if pixel_count < min_original_pixels:
+                        continue
+
+                    feature_mask = F.interpolate(
+                        cell_mask[None, None].float(),
+                        size=feature_map.shape[-2:],
+                        mode="nearest",
+                    )[0, 0].bool()
+
+                    if int(feature_mask.sum().item()) < min_feature_pixels:
+                        continue
+
+                    embedding = feature_map[:, feature_mask].mean(dim=1)
+                    embedding = F.normalize(embedding, p=2, dim=0)
+
+                    original_cell = original_mask == segment_id
+                    yy, xx = np.nonzero(original_cell)
+                    bbox = (
+                        yy.min(),
+                        xx.min(),
+                        yy.max() + 1,
+                        xx.max() + 1,
+                    )
+
+                    cell_id = next_cell_id
+                    next_cell_id += 1
+                    saved_mask[original_cell] = cell_id
+
+                    collected["embeddings"].append(
+                        embedding.cpu().numpy()
+                    )
+                    collected["cell_ids"].append(cell_id)
+                    collected["label_ids"].append(label_id)
+                    collected["segment_ids"].append(segment_id)
+                    collected["image_names"].append(image_path.name)
+                    collected["mask_files"].append(
+                        relative_mask_path.as_posix()
+                    )
+                    collected["pixel_counts"].append(pixel_count)
+                    collected["bboxes_yxyx"].append(bbox)
+                    image_cell_count += 1
+
+                np.save(
+                    output_folder / relative_mask_path,
+                    saved_mask,
+                    allow_pickle=False,
+                )
+
+                print(
+                    f"{image_index + 1}/{len(files)}: "
+                    f"{image_path.name}: {image_cell_count} cells"
+                )
+
+    finally:
+        hook.close()
+
+    if not collected["embeddings"]:
+        raise RuntimeError(
+            "No cells extracted. Check predictions and size thresholds."
+        )
+
+    collected["embeddings"] = np.stack(collected["embeddings"])
+
+    for key in (
+        "cell_ids", "label_ids", "segment_ids",
+        "pixel_counts", "bboxes_yxyx",
+    ):
+        collected[key] = np.asarray(collected[key], dtype=np.int64)
+
+    for key in ("image_names", "mask_files"):
+        collected[key] = np.asarray(collected[key], dtype=str)
+
+    np.savez_compressed(output_folder / "cells.npz", **collected)
+
+    print(
+        f"Saved {len(collected['cell_ids'])} cells "
+        f"to {output_folder / 'cells.npz'}"
+    )
+    return collected
+
+
+def plot_cell_embedding_distribution(
+    data_path,
+    figure_path="predicted_cell_tsne.png",
+    perplexity=30,
+    random_state=42,
+):
+    with np.load(data_path) as data:
+        embeddings = data["embeddings"]
+        labels = data["labels"]
+
+    if len(embeddings) < 3:
+        raise ValueError("At least three cells are required for t-SNE.")
+
+    coordinates = TSNE(
+        n_components=2,
+        perplexity=min(perplexity, len(embeddings) - 1),
+        metric="cosine",
+        init="random",
+        learning_rate="auto",
+        random_state=random_state,
+    ).fit_transform(embeddings)
+
+    plot_tsne(
+        coordinates=coordinates,
+        labels=labels,
+        output_path=figure_path,
+        cutoff_number=None,
+        class_ids=np.unique(labels),
+    )
+    return coordinates
