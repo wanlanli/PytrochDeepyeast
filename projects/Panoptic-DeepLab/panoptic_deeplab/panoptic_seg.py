@@ -327,17 +327,26 @@ class PanopticDeepLabSemSegHead(DeepLabV3PlusHead):
         self.predictor = Conv2d(head_channels, num_classes, kernel_size=1)
         nn.init.normal_(self.predictor.weight, 0, 0.001)
         nn.init.constant_(self.predictor.bias, 0)
-        class_weight = (torch.tensor( [1, 4, 3, 1, 1.5, 1.5, 1, 1, 1], dtype=torch.float32))
+        # trainId: 0 bg, 1 cell, 2 shmoo, 3 zygote, 4 tetrad, 5 lysis, 6 spore, 7 mating_type, 8 paired_unknown
+        # Measured on yeastcity_train (500-image sample): bg 67.5%, cell 14.8%, shmoo 4.2%,
+        # zygote 2.7%, tetrad 9.8%, lysis 0.51%, spore 0.35%, mating_type 0.17%, paired 0%.
+        # `cell` was previously weighted highest (4x) despite being the 2nd most common
+        # class, which starves gradient for every rarer class, including shmoo/lysis.
+        # lysis is bumped (1.5 -> 8) to reflect how rare it actually is; shmoo stays at 3,
+        # which already roughly matches its true inverse frequency.
+        class_weight = (torch.tensor( [1, 1, 3, 1, 1.5, 8, 1, 1, 1], dtype=torch.float32))
         if loss_type == "cross_entropy":
             self.loss = nn.CrossEntropyLoss(reduction="mean", ignore_index=ignore_value, weight=class_weight)
-        # elif loss_type == "hard_pixel_mining":
-        #     self.loss = ClassBalancedDeepLabCE(
-        #         ignore_label=ignore_value,
-        #         top_k_percent_pixels=loss_top_k,  # 0.2
-        #         weight=class_weight,
-        #     )
         elif loss_type == "hard_pixel_mining":
-            self.loss = DeepLabCE(ignore_label=ignore_value, top_k_percent_pixels=loss_top_k, weight=class_weight)
+            # Per-class top-k hard-pixel mining: DeepLabCE ranks the top 20% hardest
+            # pixels globally, so rare classes (shmoo/lysis) rarely survive the cut
+            # no matter how they're weighted. ClassBalancedDeepLabCE mines the top-k
+            # hardest pixels *within each class* before averaging across classes.
+            self.loss = ClassBalancedDeepLabCE(
+                ignore_label=ignore_value,
+                top_k_percent_pixels=loss_top_k,
+                weight=class_weight,
+            )
         else:
             raise ValueError("Unexpected loss type: %s" % loss_type)
 
@@ -346,6 +355,13 @@ class PanopticDeepLabSemSegHead(DeepLabV3PlusHead):
         ret = super().from_config(cfg, input_shape)
         ret["head_channels"] = cfg.MODEL.SEM_SEG_HEAD.HEAD_CHANNELS
         ret["loss_top_k"] = cfg.MODEL.SEM_SEG_HEAD.LOSS_TOP_K
+        # When INPUT.CROP.ENABLED, the base class bakes the crop size into ASPP as a
+        # fixed-kernel AvgPool2d, which requires every inference image's feature map
+        # to be an exact multiple of the train crop size (e.g. 32x32 for a 512 crop).
+        # Yeast images have variable native resolution, so this crashes eval with
+        # "`pool_kernel_size` must be divisible by the shape of inputs" on nearly
+        # every image. Force the size-agnostic AdaptiveAvgPool2d(1) path instead.
+        ret["train_size"] = None
         return ret
 
     def forward(self, features, targets=None, weights=None):
@@ -533,11 +549,12 @@ class PanopticDeepLabInsEmbedHead(DeepLabV3PlusHead):
 
     @classmethod
     def from_config(cls, cfg, input_shape):
-        if cfg.INPUT.CROP.ENABLED:
-            assert cfg.INPUT.CROP.TYPE == "absolute"
-            train_size = cfg.INPUT.CROP.SIZE
-        else:
-            train_size = None
+        # Force the size-agnostic AdaptiveAvgPool2d(1) path in ASPP instead of a
+        # fixed-kernel pool tied to the train crop size — see the matching comment
+        # in PanopticDeepLabSemSegHead.from_config for why (variable-size eval images
+        # otherwise crash with "`pool_kernel_size` must be divisible by the shape of
+        # inputs").
+        train_size = None
         decoder_channels = [cfg.MODEL.INS_EMBED_HEAD.CONVS_DIM] * (
             len(cfg.MODEL.INS_EMBED_HEAD.IN_FEATURES) - 1
         ) + [cfg.MODEL.INS_EMBED_HEAD.ASPP_CHANNELS]

@@ -95,9 +95,14 @@ def load_yeastcity_panoptic(image_dir, gt_dir, gt_json, meta):
         ret.append(
             {
                 "file_name": image_file,
-                "image_id": "_".join(
-                    os.path.splitext(os.path.basename(image_file))[0].split("_")[:3]
-                ),
+                # Yeast filenames are "{numeric_id}_leftImg8bit.png", so the id is just
+                # the first underscore-separated token. The old `split("_")[:3]` logic
+                # was copied from Cityscapes' "{city}_{seq}_{frame}_leftImg8bit.png"
+                # convention and produced "200031_leftImg8bit" here instead of
+                # "200031", which doesn't match the ids in the panoptic GT json
+                # (yeastcity_panoptic_*.json). That mismatch makes panopticapi's
+                # pq_compute fail with "no prediction for the image with id: ...".
+                "image_id": os.path.splitext(os.path.basename(image_file))[0].split("_")[0],
                 "sem_seg_file_name": sem_label_file,
                 "pan_seg_file_name": label_file,
                 "segments_info": segments_info,
@@ -170,8 +175,13 @@ def register_all_yeastcity_panoptic(root):
     for k in YEAST_CATEGORIES:
         if k["isthing"] == 1:
             thing_dataset_id_to_contiguous_id[k["id"]] = k["trainId"]
-        else:
-            stuff_dataset_id_to_contiguous_id[k["id"]] = k["trainId"]
+        # `stuff_classes` is set to the full YEAST_CATEGORIES list above (thing and
+        # stuff categories alike, reusing D2's Panoptic-FPN visualization heuristic),
+        # so SemSegEvaluator treats every trainId as a "stuff" class and needs a
+        # dataset-id mapping for all of them, not just the isthing==0 ones. Without
+        # this, encode_json_sem_seg crashes on every "thing" label (e.g. "cell")
+        # with "Label 1 is not in the metadata info".
+        stuff_dataset_id_to_contiguous_id[k["id"]] = k["trainId"]
 
     meta["thing_dataset_id_to_contiguous_id"] = thing_dataset_id_to_contiguous_id
     meta["stuff_dataset_id_to_contiguous_id"] = stuff_dataset_id_to_contiguous_id
