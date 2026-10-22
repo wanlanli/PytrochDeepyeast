@@ -1,13 +1,16 @@
 from pathlib import Path
 
-import cv2
 import numpy as np
+import pandas as pd
 import torch
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
 
+from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
+from sklearn.metrics import silhouette_score
 from sklearn.preprocessing import normalize
 from skimage.io import imread
 
@@ -196,184 +199,6 @@ def collect_image_mask_pairs(image_folder, mask_folder):
     return pairs
 
 # ============================================================
-# Image and mask loading
-# ============================================================
-
-# def read_image(image_path):
-#     """
-#     Detectron2 DefaultPredictor expects a BGR image.
-
-#     Supports ordinary 8-bit and 16-bit microscopy images.
-#     """
-#     # image = cv2.imread(
-#     #     str(image_path),
-#     #     cv2.IMREAD_UNCHANGED,
-#     # )
-
-#     # if image is None:
-#     #     raise ValueError(f"Could not read image: {image_path}")
-
-#     # # Grayscale -> BGR
-#     # if image.ndim == 2:
-#     #     image = convert_to_uint8(image)
-#     #     image = cv2.cvtColor(
-#     #         image,
-#     #         cv2.COLOR_GRAY2BGR,
-#     #     )
-
-#     # # Single-channel image
-#     # elif image.ndim == 3 and image.shape[2] == 1:
-#     #     image = convert_to_uint8(image[:, :, 0])
-#     #     image = cv2.cvtColor(
-#     #         image,
-#     #         cv2.COLOR_GRAY2BGR,
-#     #     )
-
-#     # # BGRA -> BGR
-#     # elif image.ndim == 3 and image.shape[2] == 4:
-#     #     image = convert_to_uint8(image)
-#     #     image = cv2.cvtColor(
-#     #         image,
-#     #         cv2.COLOR_BGRA2BGR,
-#     #     )
-
-#     # else:
-#     #     image = convert_to_uint8(image)
-#     image = imread(image_path)
-#     # if image.ndim == 3:
-#     #     image = image[:,:,0]
-#     return image
-#     # return convert_to_rgb(image)
-
-
-# def convert_to_rgb(image):
-#     """
-#     Convert a 2D grayscale image to 3-channel RGB format for visualization.
-
-#     Parameters:
-#     -----------
-#     image : np.ndarray
-#         A 2D grayscale image (single channel).
-
-#     Returns:
-#     --------
-#     image : np.ndarray
-#         A 3D RGB image (H x W x 3) scaled to 8-bit unsigned integers.
-#         If the input is already 3D (e.g., RGB), it is returned unchanged.
-#     """
-#     if image.ndim == 2:
-#         image = image - image.min()
-#         image = image / image.max()
-#         image = (image * 255).astype(np.uint8)
-#         image = np.stack((image,)*3, axis=-1)
-#     return image
-
-
-# def convert_to_uint8(image):
-#     if image.dtype == np.uint8:
-#         return image
-
-#     image = image.astype(np.float32)
-
-#     finite = np.isfinite(image)
-
-#     if not finite.any():
-#         return np.zeros(image.shape, dtype=np.uint8)
-
-#     low, high = np.percentile(
-#         image[finite],
-#         [0.5, 99.5],
-#     )
-
-#     if high <= low:
-#         return np.zeros(image.shape, dtype=np.uint8)
-
-#     image = np.clip(image, low, high)
-#     image = (image - low) / (high - low)
-#     image = image * 255
-
-#     return image.astype(np.uint8)
-
-
-# def read_panoptic_mask(mask_path, remove_border_instances=True, background_id=0):
-#     """
-#     Read a panoptic mask while preserving integer IDs.
-#     Optionally remove all instances that touch the image border.
-#     """
-
-#     mask = cv2.imread(
-#         str(mask_path),
-#         cv2.IMREAD_UNCHANGED,
-#     )
-
-#     if mask is None:
-#         raise ValueError(f"Could not read mask: {mask_path}")
-
-#     if mask.ndim == 3:
-#         # This pipeline expects an integer-ID mask, not RGB colors
-#         if (
-#             np.array_equal(mask[:, :, 0], mask[:, :, 1])
-#             and np.array_equal(mask[:, :, 1], mask[:, :, 2])
-#         ):
-#             mask = mask[:, :, 0]
-#         else:
-#             raise ValueError(
-#                 f"{mask_path.name} is an RGB mask. "
-#                 "It must first be converted to integer panoptic IDs."
-#             )
-
-#     mask = mask.astype(np.int64)
-
-#     if remove_border_instances:
-#         # IDs appearing on the image border
-#         border_width = 10
-        
-#         border_ids = np.unique(
-#             np.concatenate([
-#                 mask[:border_width, :].ravel(),      # top
-#                 mask[-border_width:, :].ravel(),     # bottom
-#                 mask[:, :border_width].ravel(),      # left
-#                 mask[:, -border_width:].ravel(),     # right
-#             ])
-#         )
-#         # Keep background
-#         border_ids = border_ids[border_ids != background_id]
-
-#         if len(border_ids) > 0:
-#             mask[np.isin(mask, border_ids)] = background_id
-
-#     return mask
-    
-# def split_into_four(image, panoptic_mask, threshold=1240):
-#     """
-#     Return one full-size image/mask pair, or four matching quadrants.
-
-#     Splitting is triggered when either image dimension is larger than the
-#     threshold. Odd dimensions are preserved: the bottom/right tiles receive
-#     the extra pixel.
-#     """
-#     height, width = image.shape[:2]
-
-#     if height <= threshold and width <= threshold:
-#         return [("full", image, panoptic_mask)]
-
-#     middle_y = height // 2
-#     middle_x = width // 2
-
-#     tile_slices = {
-#         "top_left": (slice(0, middle_y), slice(0, middle_x)),
-#         "top_right": (slice(0, middle_y), slice(middle_x, width)),
-#         "bottom_left": (slice(middle_y, height), slice(0, middle_x)),
-#         "bottom_right": (slice(middle_y, height), slice(middle_x, width)),
-#     }
-
-#     return [
-#         (tile_name, image[y_slice, x_slice], panoptic_mask[y_slice, x_slice])
-#         for tile_name, (y_slice, x_slice) in tile_slices.items()
-#     ]
-
-
-# ============================================================
 # Decode panoptic IDs and pool cell embeddings
 # ============================================================
 
@@ -499,178 +324,8 @@ def extract_instances_from_mask(
         "pixel_counts": original_pixel_counts,
     }
 
-###
-import cv2
-import numpy as np
-from pathlib import Path
-
-
-def get_four_crop_positions(height, width, crop_size=1200):
-    """
-    Return four corner-aligned crop positions:
-    top-left, top-right, bottom-left, bottom-right.
-    """
-    if height < crop_size or width < crop_size:
-        raise ValueError(
-            f"Image ({height}, {width}) is smaller than "
-            f"crop size {crop_size}"
-        )
-
-    return {
-        "top_left": (0, 0),
-        "top_right": (0, width - crop_size),
-        "bottom_left": (height - crop_size, 0),
-        "bottom_right": (
-            height - crop_size,
-            width - crop_size,
-        ),
-    }
-
-
 def touches_border(binary_mask, border_width=10):
     """Check whether an object touches the crop border region."""
-    return (
-        binary_mask[:border_width, :].any()
-        or binary_mask[-border_width:, :].any()
-        or binary_mask[:, :border_width].any()
-        or binary_mask[:, -border_width:].any()
-    )
-
-
-def crop_image_and_mask(
-    image,
-    mask,
-    crop_size=1024,
-    border_width=10,
-    background_id=0,
-):
-    """
-    Split an image into four overlapping crops.
-
-    For an instance appearing in multiple crops:
-    1. Keep it only in the crop containing its largest area.
-    2. Remove it from the other crops.
-    3. Remove it completely if the retained object touches
-       the retained crop's border.
-
-    Parameters
-    ----------
-    image : ndarray, shape (H, W) or (H, W, C)
-    mask : ndarray, shape (H, W)
-        Integer instance/panoptic mask.
-    crop_size : int
-        Output crop height and width.
-    border_width : int
-        Width of the excluded crop boundary.
-    background_id : int
-        Background value in the mask.
-
-    Returns
-    -------
-    crops : dict
-        Each value contains:
-        {
-            "image": cropped image,
-            "mask": cleaned mask,
-            "position": (y0, x0)
-        }
-    """
-    height, width = mask.shape[:2]
-
-    if image.shape[:2] != mask.shape[:2]:
-        raise ValueError(
-            f"Image and mask dimensions do not match: "
-            f"{image.shape[:2]} versus {mask.shape[:2]}"
-        )
-
-    # No cropping needed
-    if height <= crop_size and width <= crop_size:
-        cleaned_mask = mask.copy()
-
-        for instance_id in np.unique(cleaned_mask):
-            if instance_id == background_id:
-                continue
-
-            region = cleaned_mask == instance_id
-
-            if touches_border(region, border_width):
-                cleaned_mask[region] = background_id
-
-        return {
-            "full": {
-                "image": image.copy(),
-                "mask": cleaned_mask,
-                "position": (0, 0),
-            }
-        }
-
-    if height < crop_size or width < crop_size:
-        raise ValueError(
-            "Four 1200 × 1200 crops require both image "
-            "dimensions to be at least 1200."
-        )
-
-    positions = get_four_crop_positions(
-        height,
-        width,
-        crop_size,
-    )
-
-    crops = {}
-
-    # First create all crops without removing anything
-    for crop_name, (y0, x0) in positions.items():
-        y1 = y0 + crop_size
-        x1 = x0 + crop_size
-
-        crops[crop_name] = {
-            "image": image[y0:y1, x0:x1].copy(),
-            "mask": mask[y0:y1, x0:x1].copy(),
-            "position": (y0, x0),
-        }
-
-    instance_ids = np.unique(mask)
-    instance_ids = instance_ids[instance_ids != background_id]
-
-    for instance_id in instance_ids:
-        areas = {}
-
-        # Calculate the area of this instance in every crop
-        for crop_name, crop_data in crops.items():
-            areas[crop_name] = np.count_nonzero(
-                crop_data["mask"] == instance_id
-            )
-
-        maximum_area = max(areas.values())
-
-        if maximum_area == 0:
-            continue
-
-        # Keep the instance in only one crop
-        best_crop_name = max(areas, key=areas.get)
-
-        for crop_name, crop_data in crops.items():
-            region = crop_data["mask"] == instance_id
-
-            if crop_name != best_crop_name:
-                crop_data["mask"][region] = background_id
-
-        # Remove it if the retained region touches the crop border
-        best_mask = crops[best_crop_name]["mask"]
-        best_region = best_mask == instance_id
-
-        if touches_border(best_region, border_width):
-            best_mask[best_region] = background_id
-
-    return crops
-
-
-
-
-import numpy as np
-
-
-def touches_border(binary_mask, border_width=10):
     return (
         binary_mask[:border_width, :].any()
         or binary_mask[-border_width:, :].any()
@@ -836,18 +491,6 @@ def crop_image_and_mask(
                 ] = background_id
 
     return crops
-
-import numpy as np
-import pandas as pd
-
-
-def touches_border(binary_mask, border_width=10):
-    return (
-        binary_mask[:border_width, :].any()
-        or binary_mask[-border_width:, :].any()
-        or binary_mask[:, :border_width].any()
-        or binary_mask[:, -border_width:].any()
-    )
 
 
 def check_masks_across_crops(
@@ -1205,37 +848,210 @@ def calculate_tsne(
     return coordinates
 
 
-def plot_tsne(
+def calculate_umap(
+    embeddings,
+    n_neighbors=15,
+    min_dist=0.1,
+    n_components=2,
+    metric="cosine",
+    random_state=42,
+):
+    """
+    Project cell embeddings to 2D with UMAP for visualizing their
+    distribution and spotting candidate sub-classes.
+
+    Requires the `umap-learn` package (``pip install umap-learn``).
+    """
+    try:
+        import umap
+    except ImportError as error:
+        raise ImportError(
+            "UMAP projection requires the 'umap-learn' package. "
+            "Install it with: pip install umap-learn"
+        ) from error
+
+    embeddings = normalize(embeddings, norm="l2", axis=1)
+
+    n_samples = embeddings.shape[0]
+    if n_samples < 3:
+        raise ValueError(
+            f"UMAP requires more samples; only {n_samples} found."
+        )
+
+    neighbors = min(n_neighbors, n_samples - 1)
+
+    print(
+        f"Running UMAP: samples={n_samples}, "
+        f"n_neighbors={neighbors}, min_dist={min_dist}, metric={metric}"
+    )
+
+    reducer = umap.UMAP(
+        n_neighbors=neighbors,
+        min_dist=min_dist,
+        n_components=n_components,
+        metric=metric,
+        random_state=random_state,
+    )
+
+    return reducer.fit_transform(embeddings)
+
+
+def evaluate_kmeans_k(
+    embeddings,
+    k_values=range(2, 15),
+    random_state=42,
+    sample_size=5000,
+):
+    """
+    Sweep KMeans cluster counts to help choose how many sub-classes
+    are present in a population of cell embeddings.
+
+    Returns a DataFrame with inertia and silhouette score per k.
+    Silhouette is computed on a random subsample (`sample_size`) of
+    cells for speed on large datasets.
+    """
+    embeddings = normalize(embeddings, norm="l2", axis=1)
+    n_samples = embeddings.shape[0]
+
+    rng = np.random.default_rng(random_state)
+    if n_samples > sample_size:
+        sample_indices = rng.choice(
+            n_samples, size=sample_size, replace=False
+        )
+    else:
+        sample_indices = np.arange(n_samples)
+
+    records = []
+    for k in k_values:
+        if k < 2 or k >= n_samples:
+            continue
+
+        kmeans = KMeans(
+            n_clusters=k,
+            random_state=random_state,
+            n_init=10,
+        ).fit(embeddings)
+
+        silhouette = silhouette_score(
+            embeddings[sample_indices],
+            kmeans.labels_[sample_indices],
+            metric="cosine",
+        )
+
+        records.append({
+            "k": k,
+            "inertia": kmeans.inertia_,
+            "silhouette": silhouette,
+        })
+
+        print(f"k={k}: inertia={kmeans.inertia_:.2f}, silhouette={silhouette:.3f}")
+
+    return pd.DataFrame(records)
+
+
+def plot_kmeans_k_sweep(sweep_results, output_path=None):
+    """Plot inertia (elbow) and silhouette score against k side by side."""
+    fig, axes = plt.subplots(1, 2, figsize=(7, 3), dpi=150)
+
+    axes[0].plot(sweep_results["k"], sweep_results["inertia"], marker="o")
+    axes[0].set_xlabel("k")
+    axes[0].set_ylabel("Inertia")
+    axes[0].set_title("Elbow plot")
+
+    axes[1].plot(sweep_results["k"], sweep_results["silhouette"], marker="o", color="#E45756")
+    axes[1].set_xlabel("k")
+    axes[1].set_ylabel("Silhouette score (cosine)")
+    axes[1].set_title("Cluster separation")
+
+    fig.tight_layout()
+
+    if output_path is not None:
+        fig.savefig(output_path, bbox_inches="tight", dpi=200)
+
+    return fig, axes
+
+
+def cluster_embeddings(
+    embeddings,
+    n_clusters=8,
+    random_state=42,
+):
+    """
+    Cluster L2-normalized cell embeddings with KMeans to propose
+    sub-classes within (or across) the existing phenotype labels.
+
+    Returns
+    -------
+    cluster_ids : ndarray, shape (n_samples,)
+        Zero-based cluster assignment for each cell.
+    kmeans : sklearn.cluster.KMeans
+        The fitted model (inspect `.cluster_centers_` if needed).
+    """
+    normalized = normalize(embeddings, norm="l2", axis=1)
+
+    kmeans = KMeans(
+        n_clusters=n_clusters,
+        random_state=random_state,
+        n_init=10,
+    ).fit(normalized)
+
+    return kmeans.labels_, kmeans
+
+
+def _qualitative_palette(n_colors):
+    """Return n_colors distinct hex colors from a qualitative colormap."""
+    cmap_name = "tab10" if n_colors <= 10 else "tab20"
+    cmap = plt.get_cmap(cmap_name)
+    return [
+        "#%02x%02x%02x" % tuple(int(255 * c) for c in cmap(i % cmap.N)[:3])
+        for i in range(n_colors)
+    ]
+
+
+def plot_embedding_scatter(
     coordinates,
     labels,
+    label_names=None,
+    label_colors=None,
+    axis_label="Component",
     output_path=None,
     cutoff_number=500,
     random_state=42,
-    class_ids=range(1, 7),
+    class_ids=None,
+    highlight_indices=None,
+    ax=None,
 ):
     """
-    Plot a publication-style t-SNE figure.
+    Plot a publication-style 2D scatter of cell embeddings (t-SNE,
+    UMAP, or any other 2D projection), colored by a discrete label.
 
     Parameters
     ----------
     coordinates : array-like, shape (n_samples, 2)
-        Calculated t-SNE coordinates.
-
     labels : array-like, shape (n_samples,)
-        Class labels.
-
-    output_path : str or Path, optional
-        Save as PDF/SVG for vector output or PNG/TIFF at 600 dpi.
-
+        Any discrete label: phenotype id, KMeans cluster id, etc.
+    label_names : dict, optional
+        Maps label value -> display name. If None, labels are shown
+        as plain "Class {id}" text (pass PHENOTYPE_NAMES explicitly
+        to show phenotype names).
+    label_colors : dict, optional
+        Maps label value -> hex color. If None, an auto-generated
+        qualitative palette is used (pass PHENOTYPE_COLORS explicitly
+        to use the fixed phenotype palette).
+    axis_label : str
+        Prefix used for the x/y axis labels, e.g. "t-SNE" or "UMAP".
     cutoff_number : int or None
-        Maximum number of displayed samples per class.
+        Maximum number of displayed samples per class/cluster.
         Use None to display all samples.
-
-    random_state : int
-        Seed used for reproducible random subsampling.
-
-    class_ids : iterable
-        Classes to display.
+    class_ids : iterable, optional
+        Labels to display, in legend order. Defaults to all unique
+        values found in `labels`.
+    highlight_indices : array-like of int, optional
+        Row indices to redraw on top with a black outline, e.g. to
+        show where a specific image's cells, or a selected
+        sub-cluster, sit within the full distribution.
+    ax : matplotlib.axes.Axes, optional
+        Draw into an existing axes instead of creating a new figure.
     """
     coordinates = np.asarray(coordinates)
     labels = np.asarray(labels)
@@ -1246,12 +1062,20 @@ def plot_tsne(
             "number of samples."
         )
 
+    if class_ids is None:
+        class_ids = np.unique(labels)
+
+    class_ids = list(class_ids)
+
+    if label_colors is None:
+        auto_colors = dict(zip(class_ids, _qualitative_palette(len(class_ids))))
+
     rng = np.random.default_rng(random_state)
 
-    fig, ax = plt.subplots(
-        figsize=(3.5, 3.2),
-        dpi=300,
-    )
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(3.5, 3.2), dpi=300)
+    else:
+        fig = ax.figure
 
     for class_id in class_ids:
         all_indices = np.flatnonzero(labels == class_id)
@@ -1272,14 +1096,15 @@ def plot_tsne(
         else:
             plot_indices = all_indices
 
-        phenotype_name = PHENOTYPE_NAMES.get(
-            int(class_id),
-            f"Class {class_id}",
-        )
-        color = PHENOTYPE_COLORS.get(
-            int(class_id),
-            "#808080",
-        )
+        if label_names is not None:
+            display_name = label_names.get(class_id, f"Class {class_id}")
+        else:
+            display_name = f"Class {class_id}"
+
+        if label_colors is not None:
+            color = label_colors.get(class_id, "#808080")
+        else:
+            color = auto_colors[class_id]
 
         ax.scatter(
             coordinates[plot_indices, 0],
@@ -1290,15 +1115,28 @@ def plot_tsne(
             edgecolors="none",
             rasterized=True,
             label=(
-                f"{phenotype_name} "
+                f"{display_name} "
                 f"(shown {len(plot_indices):,}/{total_number:,})"
             ),
         )
 
-    ax.set_xlabel("t-SNE 1", fontsize=8)
-    ax.set_ylabel("t-SNE 2", fontsize=8)
+    if highlight_indices is not None:
+        highlight_indices = np.asarray(highlight_indices)
+        ax.scatter(
+            coordinates[highlight_indices, 0],
+            coordinates[highlight_indices, 1],
+            s=24,
+            facecolors="none",
+            edgecolors="black",
+            linewidths=0.8,
+            zorder=5,
+            label=f"Highlighted ({len(highlight_indices):,})",
+        )
 
-    # Absolute t-SNE coordinate values are not interpretable
+    ax.set_xlabel(f"{axis_label} 1", fontsize=8)
+    ax.set_ylabel(f"{axis_label} 2", fontsize=8)
+
+    # Absolute projection coordinate values are not interpretable
     ax.set_xticks([])
     ax.set_yticks([])
 
@@ -1315,7 +1153,6 @@ def plot_tsne(
         labelspacing=0.35,
         borderaxespad=0,
         loc="upper left",
-        # bbox_to_anchor=(1.02, 1),
     )
 
     fig.tight_layout()
@@ -1345,9 +1182,68 @@ def plot_tsne(
             **save_kwargs,
         )
 
-    # plt.show()
-
     return fig, ax
+
+
+def plot_tsne(
+    coordinates,
+    labels,
+    output_path=None,
+    cutoff_number=500,
+    random_state=42,
+    class_ids=range(1, 7),
+    label_names=None,
+    label_colors=None,
+    **kwargs,
+):
+    """
+    Backward-compatible wrapper around plot_embedding_scatter(), colored
+    by phenotype (PHENOTYPE_NAMES/PHENOTYPE_COLORS) by default.
+    """
+    return plot_embedding_scatter(
+        coordinates=coordinates,
+        labels=labels,
+        label_names=PHENOTYPE_NAMES if label_names is None else label_names,
+        label_colors=PHENOTYPE_COLORS if label_colors is None else label_colors,
+        axis_label="t-SNE",
+        output_path=output_path,
+        cutoff_number=cutoff_number,
+        random_state=random_state,
+        class_ids=class_ids,
+        **kwargs,
+    )
+
+
+def plot_umap(
+    coordinates,
+    labels,
+    output_path=None,
+    cutoff_number=None,
+    random_state=42,
+    class_ids=None,
+    label_names=None,
+    label_colors=None,
+    **kwargs,
+):
+    """
+    Convenience wrapper around plot_embedding_scatter() for UMAP
+    coordinates. By default colors use an auto-generated palette, so
+    this works equally well for phenotype labels or KMeans cluster ids
+    -- pass label_names=PHENOTYPE_NAMES, label_colors=PHENOTYPE_COLORS
+    explicitly to use the fixed phenotype palette instead.
+    """
+    return plot_embedding_scatter(
+        coordinates=coordinates,
+        labels=labels,
+        label_names=label_names,
+        label_colors=label_colors,
+        axis_label="UMAP",
+        output_path=output_path,
+        cutoff_number=cutoff_number,
+        random_state=random_state,
+        class_ids=class_ids,
+        **kwargs,
+    )
 
 
 def get_original_name(image_name):
@@ -1374,24 +1270,36 @@ def extract_cell_embeddings_from_folder(
     min_feature_pixels=2,
     instance_divisor=1000,
     category_id_offset=0,
+    overwrite=False,
 ):
     """
     Save per-cell embeddings and their corresponding full-resolution masks.
+
+    This is the main extraction entry point: for every image in
+    `image_folder` it runs the panoptic predictor, saves a full-resolution
+    instance mask, and pools the contrastive feature map into one
+    embedding per cell, together with its predicted phenotype and other
+    bookkeeping fields needed to later plot "original image + embedding
+    distribution" figures.
 
     Output:
         output_folder/cells.npz
         output_folder/masks/<original_filename>.cells.npy
 
-    cells.npz fields:
-        embeddings:       [N, C], normalized cell embeddings
+    cells.npz fields (one row per cell):
+        embeddings:       [N, C], L2-normalized cell embeddings
         cell_ids:         [N], globally unique positive IDs
         label_ids:        [N], predicted phenotype IDs
         segment_ids:      [N], original predictor segment IDs
-        image_names:      [N], source filenames
-        mask_files:       [N], paths relative to output_folder
+        image_names:      [N], source filenames (relative to image_folder)
+        image_paths:      [N], absolute source image paths
+        mask_files:       [N], mask paths relative to output_folder
         pixel_counts:     [N], full-resolution cell areas
         bboxes_yxyx:      [N, 4], (ymin, xmin, ymax, xmax);
                           maximum coordinates are exclusive
+        centroids_yx:     [N, 2], (y, x) center of each cell's bbox
+        image_heights:    [N], source image height in pixels
+        image_widths:     [N], source image width in pixels
 
     Each saved mask has shape [H, W]:
         0 = background or excluded cell
@@ -1403,6 +1311,10 @@ def extract_cell_embeddings_from_folder(
 
     When segments_info is None, assumes:
         segment_id = label_id * instance_divisor + instance_id.
+
+    overwrite:
+        If False (default), refuses to run when output_folder already
+        contains a previous extraction. Set True to replace it.
     """
     image_folder = Path(image_folder)
     output_folder = Path(output_folder)
@@ -1426,12 +1338,21 @@ def extract_cell_embeddings_from_folder(
 
     # Protect an existing extraction from partial overwriting.
     output_folder.mkdir(parents=True, exist_ok=True)
-    if (output_folder / "cells.npz").exists() or mask_folder.exists():
+    existing_extraction = (
+        (output_folder / "cells.npz").exists() or mask_folder.exists()
+    )
+    if existing_extraction and not overwrite:
         raise FileExistsError(
             f"Extraction already exists in {output_folder}. "
-            "Choose a new output_folder."
+            "Choose a new output_folder, or pass overwrite=True."
         )
-    mask_folder.mkdir()
+    if existing_extraction and overwrite:
+        if (output_folder / "cells.npz").exists():
+            (output_folder / "cells.npz").unlink()
+        if mask_folder.exists():
+            for mask_file in mask_folder.glob("*.npy"):
+                mask_file.unlink()
+    mask_folder.mkdir(exist_ok=True)
 
     collected = {
         "embeddings": [],
@@ -1439,9 +1360,13 @@ def extract_cell_embeddings_from_folder(
         "label_ids": [],
         "segment_ids": [],
         "image_names": [],
+        "image_paths": [],
         "mask_files": [],
         "pixel_counts": [],
         "bboxes_yxyx": [],
+        "centroids_yx": [],
+        "image_heights": [],
+        "image_widths": [],
     }
 
     predictor.model.eval()
@@ -1541,6 +1466,10 @@ def extract_cell_embeddings_from_folder(
                         yy.max() + 1,
                         xx.max() + 1,
                     )
+                    centroid = (
+                        (bbox[0] + bbox[2]) / 2,
+                        (bbox[1] + bbox[3]) / 2,
+                    )
 
                     cell_id = next_cell_id
                     next_cell_id += 1
@@ -1553,11 +1482,15 @@ def extract_cell_embeddings_from_folder(
                     collected["label_ids"].append(label_id)
                     collected["segment_ids"].append(segment_id)
                     collected["image_names"].append(image_path.name)
+                    collected["image_paths"].append(str(image_path.resolve()))
                     collected["mask_files"].append(
                         relative_mask_path.as_posix()
                     )
                     collected["pixel_counts"].append(pixel_count)
                     collected["bboxes_yxyx"].append(bbox)
+                    collected["centroids_yx"].append(centroid)
+                    collected["image_heights"].append(image.shape[0])
+                    collected["image_widths"].append(image.shape[1])
                     image_cell_count += 1
 
                 np.save(
@@ -1584,10 +1517,15 @@ def extract_cell_embeddings_from_folder(
     for key in (
         "cell_ids", "label_ids", "segment_ids",
         "pixel_counts", "bboxes_yxyx",
+        "image_heights", "image_widths",
     ):
         collected[key] = np.asarray(collected[key], dtype=np.int64)
 
-    for key in ("image_names", "mask_files"):
+    collected["centroids_yx"] = np.asarray(
+        collected["centroids_yx"], dtype=np.float32
+    )
+
+    for key in ("image_names", "image_paths", "mask_files"):
         collected[key] = np.asarray(collected[key], dtype=str)
 
     np.savez_compressed(output_folder / "cells.npz", **collected)
@@ -1599,33 +1537,396 @@ def extract_cell_embeddings_from_folder(
     return collected
 
 
-def plot_cell_embedding_distribution(
-    data_path,
-    figure_path="predicted_cell_tsne.png",
-    perplexity=30,
-    random_state=42,
-):
-    with np.load(data_path) as data:
+def load_cell_table(output_folder):
+    """
+    Reload the output of extract_cell_embeddings_from_folder() for
+    downstream analysis (UMAP, clustering, plotting) without needing the
+    model or predictor again -- this is all a second machine needs,
+    together with the `masks/` folder and (optionally) the original
+    images referenced by `image_paths`/`image_names`.
+
+    Returns
+    -------
+    table : pandas.DataFrame
+        One row per cell, with embeddings excluded (use `embeddings`
+        below, same row order) so the table stays CSV-friendly.
+    embeddings : ndarray, shape (N, C)
+        L2-normalized cell embeddings, aligned with `table`.
+    """
+    output_folder = Path(output_folder)
+    with np.load(output_folder / "cells.npz") as data:
+        table = pd.DataFrame({
+            "cell_id": data["cell_ids"],
+            "label_id": data["label_ids"],
+            "segment_id": data["segment_ids"],
+            "image_name": data["image_names"],
+            "image_path": data["image_paths"],
+            "mask_file": data["mask_files"],
+            "pixel_count": data["pixel_counts"],
+            "bbox_ymin": data["bboxes_yxyx"][:, 0],
+            "bbox_xmin": data["bboxes_yxyx"][:, 1],
+            "bbox_ymax": data["bboxes_yxyx"][:, 2],
+            "bbox_xmax": data["bboxes_yxyx"][:, 3],
+            "centroid_y": data["centroids_yx"][:, 0],
+            "centroid_x": data["centroids_yx"][:, 1],
+            "image_height": data["image_heights"],
+            "image_width": data["image_widths"],
+        })
         embeddings = data["embeddings"]
-        labels = data["labels"]
+
+    table["phenotype_name"] = table["label_id"].map(
+        lambda label_id: PHENOTYPE_NAMES.get(int(label_id), f"Class {label_id}")
+    )
+
+    return table, embeddings
+
+
+def add_projection_and_clusters(
+    table,
+    embeddings,
+    method="umap",
+    n_clusters=None,
+    random_state=42,
+    **projection_kwargs,
+):
+    """
+    Compute a 2D embedding projection (and, optionally, KMeans
+    sub-classes) and add them as columns to `table`.
+
+    Parameters
+    ----------
+    table : pandas.DataFrame
+        As returned by load_cell_table(); modified copy is returned.
+    embeddings : ndarray, shape (N, C)
+        Aligned with `table` (same row order).
+    method : {"umap", "tsne"}
+    n_clusters : int, optional
+        If given, also runs cluster_embeddings() and adds a
+        "cluster_id" column with proposed sub-classes.
+
+    Returns
+    -------
+    table : pandas.DataFrame
+        Copy of the input with "{method}_1"/"{method}_2" columns added
+        (and "cluster_id" if n_clusters was given).
+    """
+    table = table.copy()
+
+    if method == "umap":
+        coordinates = calculate_umap(embeddings, random_state=random_state, **projection_kwargs)
+    elif method == "tsne":
+        coordinates = calculate_tsne(embeddings, random_state=random_state, **projection_kwargs)
+    else:
+        raise ValueError(f"Unknown method: {method!r}. Use 'umap' or 'tsne'.")
+
+    table[f"{method}_1"] = coordinates[:, 0]
+    table[f"{method}_2"] = coordinates[:, 1]
+
+    if n_clusters is not None:
+        cluster_ids, _ = cluster_embeddings(
+            embeddings, n_clusters=n_clusters, random_state=random_state
+        )
+        table["cluster_id"] = cluster_ids
+
+    return table
+
+
+def plot_cell_embedding_distribution(
+    output_folder,
+    table=None,
+    embeddings=None,
+    figure_path=None,
+    method="umap",
+    color_by="label_id",
+    class_ids=None,
+    random_state=42,
+    **projection_kwargs,
+):
+    """
+    Plot the cell-embedding distribution with UMAP (default) or t-SNE,
+    colored by phenotype or by a KMeans cluster id.
+
+    table, embeddings : optional
+        Reuse an already-loaded/annotated table (e.g. from
+        load_cell_table() + add_projection_and_clusters(), with a
+        "cluster_id" column) instead of reloading from disk.
+    color_by : {"label_id", "cluster_id", ...}
+        Any column present in `table` to color points by. Phenotype
+        names/colors are used automatically for "label_id"; any other
+        column gets an auto-generated qualitative palette.
+    """
+    if table is None or embeddings is None:
+        table, embeddings = load_cell_table(output_folder)
 
     if len(embeddings) < 3:
-        raise ValueError("At least three cells are required for t-SNE.")
+        raise ValueError("At least three cells are required for a projection.")
 
-    coordinates = TSNE(
-        n_components=2,
-        perplexity=min(perplexity, len(embeddings) - 1),
-        metric="cosine",
-        init="random",
-        learning_rate="auto",
-        random_state=random_state,
-    ).fit_transform(embeddings)
+    if method == "umap":
+        coordinates = calculate_umap(embeddings, random_state=random_state, **projection_kwargs)
+        axis_label = "UMAP"
+    elif method == "tsne":
+        coordinates = calculate_tsne(embeddings, random_state=random_state, **projection_kwargs)
+        axis_label = "t-SNE"
+    else:
+        raise ValueError(f"Unknown method: {method!r}. Use 'umap' or 'tsne'.")
 
-    plot_tsne(
+    labels = table[color_by].to_numpy()
+
+    if color_by == "label_id":
+        label_names, label_colors = PHENOTYPE_NAMES, PHENOTYPE_COLORS
+    else:
+        label_names, label_colors = None, None
+
+    fig, ax = plot_embedding_scatter(
         coordinates=coordinates,
         labels=labels,
+        label_names=label_names,
+        label_colors=label_colors,
+        axis_label=axis_label,
         output_path=figure_path,
         cutoff_number=None,
-        class_ids=np.unique(labels),
+        class_ids=class_ids if class_ids is not None else np.unique(labels),
     )
-    return coordinates
+
+    table = table.copy()
+    table[f"{method}_1"] = coordinates[:, 0]
+    table[f"{method}_2"] = coordinates[:, 1]
+
+    return table, coordinates
+
+
+def crop_cell(image, mask, bbox_yxyx, cell_id=None, pad=20):
+    """
+    Crop `image`/`mask` around a bbox (ymin, xmin, ymax, xmax) with
+    `pad` extra pixels on each side, clipped to image bounds.
+
+    If `cell_id` is given, returns a boolean array marking that cell's
+    pixels within the crop (useful to overlay just one cell instead of
+    every object in the neighborhood).
+    """
+    height, width = image.shape[:2]
+    ymin, xmin, ymax, xmax = bbox_yxyx
+
+    y0 = max(0, int(ymin) - pad)
+    x0 = max(0, int(xmin) - pad)
+    y1 = min(height, int(ymax) + pad)
+    x1 = min(width, int(xmax) + pad)
+
+    image_crop = image[y0:y1, x0:x1]
+    mask_crop = mask[y0:y1, x0:x1]
+
+    if cell_id is not None:
+        return image_crop, mask_crop == cell_id
+
+    return image_crop, mask_crop
+
+
+def plot_cell_gallery(
+    table,
+    cell_ids,
+    output_folder,
+    image_folder=None,
+    ncols=6,
+    pad=20,
+    figure_path=None,
+):
+    """
+    Plot a grid of per-cell crops (original image with that cell's mask
+    outlined), for visually inspecting what a UMAP sub-cluster actually
+    looks like morphologically.
+
+    Parameters
+    ----------
+    table : pandas.DataFrame
+        As returned by load_cell_table().
+    cell_ids : sequence of int
+        Which cells to display, e.g. table.loc[selection, "cell_id"].
+    output_folder : str or Path
+        Folder passed to extract_cell_embeddings_from_folder()
+        (mask_file paths in `table` are relative to it).
+    image_folder : str or Path, optional
+        Overrides the image folder; defaults to each cell's stored
+        `image_path`, which is only valid on the machine that ran the
+        extraction. Pass this when working on a different machine.
+    """
+    output_folder = Path(output_folder)
+    cell_ids = list(cell_ids)
+    nrows = int(np.ceil(len(cell_ids) / ncols))
+
+    fig, axes = plt.subplots(
+        nrows, ncols, figsize=(2.2 * ncols, 2.2 * nrows), dpi=150,
+    )
+    axes = np.atleast_1d(axes).ravel()
+
+    mask_cache = {}
+    image_cache = {}
+
+    for ax, cell_id in zip(axes, cell_ids):
+        row = table.loc[table["cell_id"] == cell_id]
+        if row.empty:
+            ax.set_visible(False)
+            continue
+        row = row.iloc[0]
+
+        if image_folder is not None:
+            image_path = Path(image_folder) / row["image_name"]
+        else:
+            image_path = Path(row["image_path"])
+
+        mask_path = output_folder / row["mask_file"]
+
+        if image_path not in image_cache:
+            image_cache[image_path] = imread(image_path)
+        if mask_path not in mask_cache:
+            mask_cache[mask_path] = np.load(mask_path)
+
+        image = image_cache[image_path]
+        mask = mask_cache[mask_path]
+
+        bbox = (
+            row["bbox_ymin"], row["bbox_xmin"],
+            row["bbox_ymax"], row["bbox_xmax"],
+        )
+        image_crop, cell_region = crop_cell(image, mask, bbox, cell_id=cell_id, pad=pad)
+
+        ax.imshow(image_crop)
+        ax.contour(cell_region, levels=[0.5], colors="#E45756", linewidths=1.2)
+        ax.set_title(
+            f"{row['phenotype_name']} (#{cell_id})", fontsize=7,
+        )
+        ax.set_xticks([])
+        ax.set_yticks([])
+
+    for ax in axes[len(cell_ids):]:
+        ax.set_visible(False)
+
+    fig.tight_layout()
+
+    if figure_path is not None:
+        fig.savefig(figure_path, bbox_inches="tight", dpi=200)
+
+    return fig, axes
+
+
+def plot_image_with_cells(
+    image_name,
+    table,
+    output_folder,
+    image_folder=None,
+    color_by="label_id",
+    label_colors=None,
+    highlight_cell_ids=None,
+    ax=None,
+):
+    """
+    Plot one full source image with its predicted cell masks overlaid,
+    colored by phenotype (or cluster), optionally with a subset of
+    cells outlined to show where they came from (e.g. a UMAP
+    sub-cluster selected with plot_embedding_scatter()).
+    """
+    image_rows = table.loc[table["image_name"] == image_name]
+    if image_rows.empty:
+        raise ValueError(f"No cells found for image: {image_name}")
+
+    output_folder = Path(output_folder)
+    mask_path = output_folder / image_rows.iloc[0]["mask_file"]
+    mask = np.load(mask_path)
+
+    if image_folder is not None:
+        image_path = Path(image_folder) / image_name
+    else:
+        image_path = Path(image_rows.iloc[0]["image_path"])
+    image = imread(image_path)
+
+    if label_colors is None:
+        if color_by == "label_id":
+            label_colors = PHENOTYPE_COLORS
+        else:
+            unique_values = sorted(image_rows[color_by].unique())
+            label_colors = dict(zip(unique_values, _qualitative_palette(len(unique_values))))
+
+    overlay = np.zeros((*mask.shape, 4), dtype=np.float32)
+    for _, row in image_rows.iterrows():
+        color_hex = label_colors.get(row[color_by], "#808080")
+        rgb = tuple(int(color_hex.lstrip("#")[i:i + 2], 16) / 255 for i in (0, 2, 4))
+        cell_region = mask == row["cell_id"]
+        overlay[cell_region] = (*rgb, 0.45)
+
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(6, 6), dpi=150)
+    else:
+        fig = ax.figure
+
+    ax.imshow(image)
+    ax.imshow(overlay)
+
+    if highlight_cell_ids is not None:
+        highlight_mask = np.isin(mask, list(highlight_cell_ids)) & (mask > 0)
+        ax.contour(highlight_mask, levels=[0.5], colors="white", linewidths=1.5)
+
+    legend_handles = [
+        mpatches.Patch(
+            color=color,
+            label=PHENOTYPE_NAMES.get(value, str(value)) if color_by == "label_id" else str(value),
+        )
+        for value, color in label_colors.items()
+        if value in image_rows[color_by].unique()
+    ]
+    ax.legend(handles=legend_handles, frameon=False, fontsize=7, loc="upper right")
+    ax.set_title(image_name, fontsize=9)
+    ax.set_xticks([])
+    ax.set_yticks([])
+
+    return fig, ax
+
+
+def plot_umap_with_image_panel(
+    coordinates,
+    table,
+    image_name,
+    output_folder,
+    image_folder=None,
+    color_by="label_id",
+    figure_path=None,
+):
+    """
+    Two-panel figure linking a selected image to its position in the
+    embedding distribution: left = original image with its cell masks
+    overlaid, right = the full UMAP/t-SNE scatter with that image's
+    cells highlighted.
+    """
+    fig, (ax_image, ax_scatter) = plt.subplots(
+        1, 2, figsize=(10, 5), dpi=150,
+    )
+
+    image_indices = np.flatnonzero(table["image_name"].to_numpy() == image_name)
+
+    plot_image_with_cells(
+        image_name=image_name,
+        table=table,
+        output_folder=output_folder,
+        image_folder=image_folder,
+        color_by=color_by,
+        ax=ax_image,
+    )
+
+    labels = table[color_by].to_numpy()
+    label_names = PHENOTYPE_NAMES if color_by == "label_id" else None
+    label_colors = PHENOTYPE_COLORS if color_by == "label_id" else None
+    plot_embedding_scatter(
+        coordinates=coordinates,
+        labels=labels,
+        label_names=label_names,
+        label_colors=label_colors,
+        class_ids=np.unique(labels),
+        cutoff_number=500,
+        highlight_indices=image_indices,
+        ax=ax_scatter,
+    )
+
+    fig.tight_layout()
+
+    if figure_path is not None:
+        fig.savefig(figure_path, bbox_inches="tight", dpi=200)
+
+    return fig, (ax_image, ax_scatter)
