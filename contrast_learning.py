@@ -7,12 +7,15 @@ import torch.nn.functional as F
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 
+from scipy import ndimage as ndi
+
 from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
 from sklearn.metrics import silhouette_score
 from sklearn.preprocessing import normalize
 from skimage.io import imread
+from skimage.morphology import remove_small_holes
 
 # ============================================================
 # Configuration
@@ -1246,6 +1249,63 @@ def plot_umap(
     )
 
 
+def postprocess_cell_mask(
+    cell_mask,
+    fill_holes=True,
+    hole_area_threshold=None,
+    remove_if_touches_border=True,
+    border_width=1,
+):
+    """
+    Smooth a single predicted cell's binary mask before it is scored
+    and saved: fill interior holes left by noisy per-pixel predictions,
+    and drop cells that are truncated by the image border.
+
+    Parameters
+    ----------
+    cell_mask : ndarray(bool), shape (H, W)
+        One instance's raw binary mask (e.g. predicted_mask == segment_id).
+    fill_holes : bool
+        Fill enclosed background pixels inside the cell.
+    hole_area_threshold : int, optional
+        None (default) fills every enclosed hole, via
+        scipy.ndimage.binary_fill_holes. Pass an integer instead to
+        only fill holes up to that many pixels (skimage's
+        remove_small_holes) -- use this if a phenotype can legitimately
+        contain another instance inside it (e.g. spores inside an
+        ascus), since a large "hole" there is really a neighboring
+        cell, not segmentation noise.
+    remove_if_touches_border : bool
+        Drop cells that touch the image border: they are truncated by
+        the field of view and not full cells.
+    border_width : int
+        How many edge pixels count as "the border". Use 1 for the real
+        image edge; a larger value also drops cells sitting very close
+        to it.
+
+    Returns
+    -------
+    mask : ndarray(bool), shape (H, W)
+        The smoothed mask, or all-False if the cell was dropped.
+    kept : bool
+        False if the cell was dropped for touching the border.
+    """
+    cell_mask = np.asarray(cell_mask, dtype=bool)
+
+    if fill_holes and cell_mask.any():
+        if hole_area_threshold is None:
+            cell_mask = ndi.binary_fill_holes(cell_mask)
+        else:
+            cell_mask = remove_small_holes(
+                cell_mask, area_threshold=hole_area_threshold
+            )
+
+    if remove_if_touches_border and touches_border(cell_mask, border_width):
+        return np.zeros_like(cell_mask), False
+
+    return cell_mask, True
+
+
 def get_original_name(image_name):
     """Remove crop-position suffix from a filename."""
     for suffix in (
@@ -1271,6 +1331,10 @@ def extract_cell_embeddings_from_folder(
     instance_divisor=1000,
     category_id_offset=0,
     overwrite=False,
+    fill_holes=True,
+    hole_area_threshold=None,
+    remove_border_cells=True,
+    border_width=1,
 ):
     """
     Save per-cell embeddings and their corresponding full-resolution masks.
@@ -1281,6 +1345,14 @@ def extract_cell_embeddings_from_folder(
     embedding per cell, together with its predicted phenotype and other
     bookkeeping fields needed to later plot "original image + embedding
     distribution" figures.
+
+    Each cell's raw predicted mask is first smoothed with
+    postprocess_cell_mask(): interior holes are filled, and cells that
+    touch the image border (truncated by the field of view) are
+    dropped entirely -- see `fill_holes`, `hole_area_threshold`,
+    `remove_border_cells`, `border_width` below. Pixel counts, bboxes,
+    centroids, the pooled embedding, and the saved mask are all
+    computed from the smoothed mask.
 
     Output:
         output_folder/cells.npz
@@ -1440,11 +1512,27 @@ def extract_cell_embeddings_from_folder(
                 image_cell_count = 0
 
                 for segment_id, label_id in segments:
-                    cell_mask = predicted_mask == segment_id
-                    pixel_count = int(cell_mask.sum().item())
+                    raw_cell_mask = original_mask == segment_id
+
+                    cell_mask_np, kept = postprocess_cell_mask(
+                        raw_cell_mask,
+                        fill_holes=fill_holes,
+                        hole_area_threshold=hole_area_threshold,
+                        remove_if_touches_border=remove_border_cells,
+                        border_width=border_width,
+                    )
+
+                    if not kept:
+                        continue
+
+                    pixel_count = int(cell_mask_np.sum())
 
                     if pixel_count < min_original_pixels:
                         continue
+
+                    cell_mask = torch.as_tensor(
+                        cell_mask_np, device=feature_map.device
+                    )
 
                     feature_mask = F.interpolate(
                         cell_mask[None, None].float(),
@@ -1458,8 +1546,7 @@ def extract_cell_embeddings_from_folder(
                     embedding = feature_map[:, feature_mask].mean(dim=1)
                     embedding = F.normalize(embedding, p=2, dim=0)
 
-                    original_cell = original_mask == segment_id
-                    yy, xx = np.nonzero(original_cell)
+                    yy, xx = np.nonzero(cell_mask_np)
                     bbox = (
                         yy.min(),
                         xx.min(),
@@ -1473,7 +1560,7 @@ def extract_cell_embeddings_from_folder(
 
                     cell_id = next_cell_id
                     next_cell_id += 1
-                    saved_mask[original_cell] = cell_id
+                    saved_mask[cell_mask_np] = cell_id
 
                     collected["embeddings"].append(
                         embedding.cpu().numpy()
