@@ -20,14 +20,21 @@ YEAST_CATEGORIES = [
     {"color": [42, 180, 112], "isthing": 1, "id": 4, "trainId": 4, "name": "tetrad"},
     {"color": [39, 69, 167], "isthing": 1, "id": 5, "trainId": 5, "name": "lysis"},
     {"color": [71, 20, 101], "isthing": 1, "id": 6, "trainId": 6, "name": "spore"},
+    # trainId 0-6 are the meaningful phenotype classes. Everything below (mating-type
+    # variants, paired, and the raw "unknown" annotation) is folded into a single
+    # trainId=7 "unknown" class, so the model has 8 output channels in total.
     {"color": [252, 111, 177], "isthing": 1, "id": 7, "trainId": 7, "name": "cell_mt"},
     {"color": [255, 242, 161], "isthing": 1, "id": 8, "trainId": 7, "name": "shmoo_mt"},
     {"color": [189, 245, 169], "isthing": 1, "id": 9, "trainId": 7, "name": "fusion_mt"},
     {"color": [120, 224, 245], "isthing": 1, "id": 10, "trainId": 7, "name": "tetrads_mt"},
-    {"color": [105, 150, 230], "isthing": 0, "id": 11, "trainId": 8, "name": "paired"},
-    {"color": [120, 107, 207], "isthing": 0, "id": 12, "trainId": 8, "name": "unknown"},
+    {"color": [105, 150, 230], "isthing": 0, "id": 11, "trainId": 7, "name": "paired"},
+    {"color": [120, 107, 207], "isthing": 0, "id": 12, "trainId": 7, "name": "unknown"},
 ]
 
+# One entry per trainId (0-7), in trainId order. This must have exactly NUM_CLASSES
+# entries: detectron2's SemSegEvaluator sets `self._num_classes = len(stuff_classes)`,
+# so a mismatch here silently reports IoU under the wrong class names (or phantom
+# all-nan classes) rather than failing loudly.
 YEAST_SEM_SEG_CATEGORIES = [
     {"id": 0, "name": "background", "color": [0, 0, 0]},
     {"id": 1, "name": "cell", "color": [253, 27, 27]},
@@ -36,6 +43,5 @@ YEAST_SEM_SEG_CATEGORIES = [
     {"id": 4, "name": "tetrad", "color": [42, 180, 112]},
     {"id": 5, "name": "lysis", "color": [39, 69, 167]},
     {"id": 6, "name": "spore", "color": [71, 20, 101]},
-    {"id": 7, "name": "mating_type", "color": [252, 111, 177]},
-    {"id": 8, "name": "paired_unknown", "color": [105, 150, 230]},
+    {"id": 7, "name": "unknown", "color": [252, 111, 177]},
 ]

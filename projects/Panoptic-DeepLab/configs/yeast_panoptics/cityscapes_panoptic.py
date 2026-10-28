@@ -4,7 +4,7 @@ import logging
 import os
 
 from detectron2.data import DatasetCatalog, MetadataCatalog
-from .meta import YEAST_CATEGORIES
+from .meta import YEAST_CATEGORIES, YEAST_SEM_SEG_CATEGORIES
 from detectron2.utils.file_io import PathManager
 from detectron2.structures import BoxMode
 
@@ -146,10 +146,17 @@ def register_all_yeastcity_panoptic(root):
     # visualization function in D2 handles thing and class classes differently
     # due to some heuristic used in Panoptic FPN. We keep the same naming to
     # enable reusing existing visualization functions.
-    thing_classes = [k["name"] for k in YEAST_CATEGORIES]
-    thing_colors = [k["color"] for k in YEAST_CATEGORIES]
-    stuff_classes = [k["name"] for k in YEAST_CATEGORIES]
-    stuff_colors = [k["color"] for k in YEAST_CATEGORIES]
+    #
+    # Use the trainId-deduplicated list (one entry per trainId), not the raw
+    # YEAST_CATEGORIES (one entry per raw annotation id). SemSegEvaluator sets
+    # `self._num_classes = len(stuff_classes)`, so if this list were as long as
+    # YEAST_CATEGORIES (13 raw ids) while the model only predicts len(trainId
+    # values) classes, eval would silently misname classes / report phantom
+    # all-nan ones instead of the real 0-7 trainIds.
+    thing_classes = [k["name"] for k in YEAST_SEM_SEG_CATEGORIES]
+    thing_colors = [k["color"] for k in YEAST_SEM_SEG_CATEGORIES]
+    stuff_classes = [k["name"] for k in YEAST_SEM_SEG_CATEGORIES]
+    stuff_colors = [k["color"] for k in YEAST_SEM_SEG_CATEGORIES]
 
     meta["thing_classes"] = thing_classes
     meta["thing_colors"] = thing_colors

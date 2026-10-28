@@ -1,7 +1,7 @@
 _BASE_: ../Cityscapes-PanopticSegmentation/Base-PanopticDeepLab-OS16.yaml
 MODEL:
   # WEIGHTS: "detectron2://DeepLab/R-52.pkl"
-  WEIGHTS: "/home/liwa/data/oneformer_output/output/model_0119999_v3.pth"
+  WEIGHTS: "/home/liwa/data/oneformer_output/output/model_0159999_v2.pth"
   PIXEL_MEAN: [102.364, 102.364, 102.364]
   PIXEL_STD: [23.532, 23.532, 23.532]
   BACKBONE:
@@ -14,22 +14,27 @@ MODEL:
     STEM_OUT_CHANNELS: 128
     STRIDE_IN_1X1: False
   RETINANET:
-    NUM_CLASSES: 9
+    NUM_CLASSES: 8
   SEM_SEG_HEAD:
-    NUM_CLASSES: 9
+    NUM_CLASSES: 8
     LOSS_WEIGHT: 2.0
   ROI_BOX_HEAD:
-    FED_LOSS_NUM_CLASSES: 9
+    FED_LOSS_NUM_CLASSES: 8
   ROI_HEADS:
-    NUM_CLASSES: 9
+    NUM_CLASSES: 8
   PANOPTIC_DEEPLAB:
     SIZE_DIVISIBILITY: 512
 DATASETS:
   TRAIN: ("yeastcity_train",)
-  TEST: ("yeastcity_val",)
+  TEST: ("yeastcity_test",)
 SOLVER:
   BASE_LR: 0.0005
-  MAX_ITER: 200000 #200000
+  # The last full 200k-iter run plateaued hard in its second half: loss_sem_seg only
+  # went 0.085 -> 0.0836 and val mIoU only 36.01 -> 36.08 across the last ~75k iters
+  # (roughly the last 1.5 of its ~2d22h wall-clock time). Cut to 130k so the
+  # WarmupPolyLR schedule anneals to ~0 by the point training actually stops being
+  # useful, instead of spending another day past the plateau.
+  MAX_ITER: 130000 #200000
   IMS_PER_BATCH: 16
   CHECKPOINT_PERIOD: 5000 #5000
 TEST:

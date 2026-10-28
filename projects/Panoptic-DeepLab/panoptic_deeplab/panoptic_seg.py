@@ -327,14 +327,16 @@ class PanopticDeepLabSemSegHead(DeepLabV3PlusHead):
         self.predictor = Conv2d(head_channels, num_classes, kernel_size=1)
         nn.init.normal_(self.predictor.weight, 0, 0.001)
         nn.init.constant_(self.predictor.bias, 0)
-        # trainId: 0 bg, 1 cell, 2 shmoo, 3 zygote, 4 tetrad, 5 lysis, 6 spore, 7 mating_type, 8 paired_unknown
+        # trainId: 0 bg, 1 cell, 2 shmoo, 3 zygote, 4 tetrad, 5 lysis, 6 spore, 7 unknown
+        # (7 used to be split into mating_type/paired_unknown; both are now folded into
+        # a single "unknown" trainId, so there are 8 classes/channels total instead of 9).
         # Measured on yeastcity_train (500-image sample): bg 67.5%, cell 14.8%, shmoo 4.2%,
-        # zygote 2.7%, tetrad 9.8%, lysis 0.51%, spore 0.35%, mating_type 0.17%, paired 0%.
+        # zygote 2.7%, tetrad 9.8%, lysis 0.51%, spore 0.35%, mating_type+paired ~0.17%.
         # `cell` was previously weighted highest (4x) despite being the 2nd most common
         # class, which starves gradient for every rarer class, including shmoo/lysis.
         # lysis is bumped (1.5 -> 8) to reflect how rare it actually is; shmoo stays at 3,
         # which already roughly matches its true inverse frequency.
-        class_weight = (torch.tensor( [1, 1, 3, 1, 1.5, 8, 1, 1, 1], dtype=torch.float32))
+        class_weight = (torch.tensor( [1, 1, 3, 1, 1.5, 8, 1, 1], dtype=torch.float32))
         if loss_type == "cross_entropy":
             self.loss = nn.CrossEntropyLoss(reduction="mean", ignore_index=ignore_value, weight=class_weight)
         elif loss_type == "hard_pixel_mining":
@@ -423,6 +425,7 @@ class PanopticDeepLabInsEmbedHead(DeepLabV3PlusHead):
         contrast_loss_weight: float = 0.005,
         contrast_temperature: float = 0.1,
         contrast_max_samples: int = 2048,
+        contrast_ignore_labels: tuple = (0,),
         **kwargs,
     ):
         """
@@ -448,6 +451,7 @@ class PanopticDeepLabInsEmbedHead(DeepLabV3PlusHead):
         self.contrast_loss_weight = contrast_loss_weight
         self.contrast_temperature = contrast_temperature
         self.contrast_max_samples = contrast_max_samples
+        self.contrast_ignore_labels = contrast_ignore_labels
         use_bias = norm == ""
         # center prediction
         # `head` is additional transform before predictor
@@ -577,6 +581,12 @@ class PanopticDeepLabInsEmbedHead(DeepLabV3PlusHead):
             contrast_loss_weight=0.005,
             contrast_temperature=0.1,
             contrast_max_samples=2048,
+            # trainId 0 is background (~67% of pixels). Without excluding it, a random
+            # sample of pixels is mostly background-background positive pairs, which the
+            # loss satisfies trivially — across a full 200k-iter run loss_contrast never
+            # moved (0.0334 -> 0.0335), i.e. it wasn't learning anything. Excluding it
+            # forces the loss to actually separate the phenotype classes.
+            contrast_ignore_labels=(0,),
             use_depthwise_separable_conv=cfg.MODEL.SEM_SEG_HEAD.USE_DEPTHWISE_SEPARABLE_CONV,
         )
         return ret
@@ -652,6 +662,8 @@ class PanopticDeepLabInsEmbedHead(DeepLabV3PlusHead):
         labels = targets_small.reshape(-1)
 
         valid = labels != self.semantic_ignore_value
+        for ignore_label in self.contrast_ignore_labels:
+            valid &= labels != ignore_label
         features = features[valid]
         labels = labels[valid]
 
